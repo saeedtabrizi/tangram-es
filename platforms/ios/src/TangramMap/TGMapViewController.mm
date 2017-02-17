@@ -9,6 +9,7 @@
 //
 
 #import "TGMapViewController.h"
+#import "TGMapViewController+Internal.h"
 #import "TGHelpers.h"
 #import "platform_ios.h"
 #import "data/propertyItem.h"
@@ -25,7 +26,6 @@ __CG_STATIC_ASSERT(sizeof(TGGeoPoint) == sizeof(Tangram::LngLat));
 @property (nullable, strong, nonatomic) EAGLContext* context;
 @property (assign, nonatomic) CGFloat contentScaleFactor;
 @property (assign, nonatomic) BOOL renderRequested;
-@property (assign, nonatomic, nullable) Tangram::Map* map;
 
 @end
 
