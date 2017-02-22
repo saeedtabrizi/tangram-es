@@ -61,6 +61,7 @@ set(FRAMEWORK_HEADERS
     ${PROJECT_SOURCE_DIR}/platforms/ios/src/TangramMap/TGGeoPolygon.h
     ${PROJECT_SOURCE_DIR}/platforms/ios/src/TangramMap/TGGeoPoint.h
     ${PROJECT_SOURCE_DIR}/platforms/ios/src/TangramMap/TGMarker.h
+    ${PROJECT_SOURCE_DIR}/platforms/ios/src/TangramMap/TGEaseType.h
     ${PROJECT_SOURCE_DIR}/platforms/ios/src/TangramMap/TGSceneUpdate.h
     ${PROJECT_SOURCE_DIR}/platforms/ios/src/TangramMap/TGHttpHandler.h
     ${PROJECT_SOURCE_DIR}/platforms/ios/src/TangramMap/TGLabelPickResult.h
