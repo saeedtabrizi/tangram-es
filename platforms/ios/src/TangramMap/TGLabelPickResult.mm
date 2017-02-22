@@ -12,7 +12,7 @@
 
 @property (assign, nonatomic) TGGeoPoint coordinates;
 @property (assign, nonatomic) TGLabelType type;
-@property (strong, nonatomic) NSDictionary* properties;
+@property (weak, nonatomic) NSDictionary* properties;
 
 @end
 
