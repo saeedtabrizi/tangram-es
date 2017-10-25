@@ -1,11 +1,15 @@
 #include "data/tileSource.h"
 
+#include "data/formats/geoJson.h"
+#include "data/formats/mvt.h"
+#include "data/formats/topoJson.h"
 #include "data/tileData.h"
+#include "platform.h"
 #include "tile/tileID.h"
 #include "tile/tile.h"
 #include "tile/tileTask.h"
-#include "platform.h"
 #include "log.h"
+#include "util/geom.h"
 
 #include <atomic>
 #include <functional>
@@ -13,11 +17,9 @@
 namespace Tangram {
 
 TileSource::TileSource(const std::string& _name, std::unique_ptr<DataSource> _sources,
-                       int32_t _minDisplayZoom, int32_t _maxDisplayZoom, int32_t _maxZoom) :
+                       ZoomOptions _zoomOptions) :
     m_name(_name),
-    m_minDisplayZoom(_minDisplayZoom),
-    m_maxDisplayZoom(_maxDisplayZoom),
-    m_maxZoom(_maxZoom),
+    m_zoomOptions(_zoomOptions),
     m_sources(std::move(_sources)) {
 
     static std::atomic<int32_t> s_serial;
@@ -27,6 +29,30 @@ TileSource::TileSource(const std::string& _name, std::unique_ptr<DataSource> _so
 
 TileSource::~TileSource() {
     clearData();
+}
+
+int32_t TileSource::zoomBiasFromTileSize(int32_t tileSize) {
+    const auto BaseTileSize = 256;
+
+    // zero tileSize (log(0) is undefined)
+    if (!tileSize) { return 0; }
+
+    if (isPowerOfTwo(tileSize)) {
+        return std::log(static_cast<float>(tileSize)/static_cast<float>(BaseTileSize)) / std::log(2);
+    }
+
+    LOGW("Illegal tile_size defined. Must be power of 2. Default tileSize of 256px set");
+    return 0;
+}
+
+const char* TileSource::mimeType() const {
+    switch (m_format) {
+    case Format::GeoJson: return "application/geo+json";
+    case Format::TopoJson: return "application/topo+json";
+    case Format::Mvt: return "application/vnd.mapbox-vector-tile";
+    }
+    assert(false);
+    return "";
 }
 
 std::shared_ptr<TileTask> TileSource::createTask(TileID _tileId, int _subTask) {
@@ -59,21 +85,6 @@ void TileSource::clearData() {
     m_generation++;
 }
 
-bool TileSource::equals(const TileSource& other) const {
-    if (m_name != other.m_name) { return false; }
-    // TODO compare DataSources instead
-    //if (m_urlTemplate != other.m_urlTemplate) { return false; }
-    if (m_minDisplayZoom != other.m_minDisplayZoom) { return false; }
-    if (m_maxDisplayZoom != other.m_maxDisplayZoom) { return false; }
-    if (m_maxZoom != other.m_maxZoom) { return false; }
-    if (m_rasterSources.size() != other.m_rasterSources.size()) { return false; }
-    for (size_t i = 0, end = m_rasterSources.size(); i < end; ++i) {
-        if (!m_rasterSources[i]->equals(*other.m_rasterSources[i])) { return false; }
-    }
-
-    return true;
-}
-
 void TileSource::loadTileData(std::shared_ptr<TileTask> _task, TileTaskCb _cb) {
 
     if (m_sources) {
@@ -81,12 +92,24 @@ void TileSource::loadTileData(std::shared_ptr<TileTask> _task, TileTaskCb _cb) {
             if (m_sources->loadTileData(_task, _cb)) {
                 _task->startedLoading();
             }
+        } else if(_task->hasData()) {
+            _cb.func(_task);
         }
     }
 
     for (auto& subTask : _task->subTasks()) {
         subTask->source().loadTileData(subTask, _cb);
     }
+}
+
+std::shared_ptr<TileData> TileSource::parse(const TileTask& _task, const MapProjection& _projection) const {
+    switch (m_format) {
+    case Format::TopoJson: return TopoJson::parseTile(_task, _projection, m_id);
+    case Format::GeoJson: return GeoJson::parseTile(_task, _projection, m_id);
+    case Format::Mvt: return Mvt::parseTile(_task, _projection, m_id);
+    }
+    assert(false);
+    return nullptr;
 }
 
 void TileSource::cancelLoadingTile(const TileID& _tileID) {
@@ -118,11 +141,11 @@ void TileSource::addRasterSource(std::shared_ptr<TileSource> _rasterSource) {
      */
     int32_t rasterMinDisplayZoom = _rasterSource->minDisplayZoom();
     int32_t rasterMaxDisplayZoom = _rasterSource->maxDisplayZoom();
-    if (rasterMinDisplayZoom > m_minDisplayZoom) {
-        m_minDisplayZoom = rasterMinDisplayZoom;
+    if (rasterMinDisplayZoom > m_zoomOptions.minDisplayZoom) {
+        m_zoomOptions.minDisplayZoom = rasterMinDisplayZoom;
     }
-    if (rasterMaxDisplayZoom < m_maxDisplayZoom) {
-        m_maxDisplayZoom = rasterMaxDisplayZoom;
+    if (rasterMaxDisplayZoom < m_zoomOptions.maxDisplayZoom) {
+        m_zoomOptions.maxDisplayZoom = rasterMaxDisplayZoom;
     }
     m_rasterSources.push_back(_rasterSource);
 }

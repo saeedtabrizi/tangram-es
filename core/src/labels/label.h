@@ -2,7 +2,7 @@
 
 #include "labels/fadeEffect.h"
 #include "labels/labelProperty.h"
-#include "tangram.h"
+#include "map.h"
 #include "util/types.h"
 #include "util/hash.h"
 
@@ -21,6 +21,7 @@ namespace Tangram {
 struct ScreenTransform;
 struct ViewState;
 struct OBBBuffer;
+class Texture;
 
 class Label {
 
@@ -54,6 +55,7 @@ public:
 
     struct Options {
         glm::vec2 offset;
+        glm::vec2 buffer;
         float priority = std::numeric_limits<float>::max();
         bool collide = true;
         Transition selectTransition;
@@ -61,7 +63,6 @@ public:
         Transition showTransition;
         size_t repeatGroup = 0;
         float repeatDistance = 0;
-        float buffer = 0.f;
         size_t paramHash = 0; // the label hash based on its styling parameters
         LabelProperty::Anchors anchors;
         bool optional = false;
@@ -87,6 +88,8 @@ public:
 
     // Returns the candidate priority for a feature with multiple labels
     virtual float candidatePriority() const { return 0; }
+
+    virtual const Texture* texture() const { return nullptr; }
 
     bool update(const glm::mat4& _mvp, const ViewState& _viewState,
                 const AABB* _bounds, ScreenTransform& _transform);
@@ -124,8 +127,11 @@ public:
 
     bool occludedLastFrame() const { return m_occludedLastFrame; }
 
-    Label* parent() const { return m_parent; }
-    void setParent(Label& parent, bool definePriority, bool defineCollide);
+    Label* relative() const { return m_relative; }
+    bool isChild() const { return bool(m_relative); }
+    bool isSibling() const { return bool(m_relative) && bool(m_relative->relative()); }
+
+    void setRelative(Label& _relative, bool _definePriority, bool _defineCollide);
 
     LabelProperty::Anchor anchorType() const {
         return m_options.anchors[m_anchorIndex];
@@ -159,7 +165,7 @@ protected:
 
     Options m_options;
 
-    Label* m_parent;
+    Label* m_relative;
 
     State m_state;
     FadeEffect m_fade;

@@ -5,6 +5,8 @@ import android.graphics.Bitmap;
 import android.graphics.PointF;
 import android.opengl.GLSurfaceView;
 import android.opengl.GLSurfaceView.Renderer;
+import android.os.Handler;
+import android.support.annotation.Keep;
 import android.util.DisplayMetrics;
 
 import com.mapzen.tangram.TouchInput.Gestures;
@@ -13,7 +15,6 @@ import okhttp3.Callback;
 import okhttp3.Response;
 
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -27,9 +28,11 @@ import javax.microedition.khronos.opengles.GL10;
  */
 public class MapController implements Renderer {
 
+
     /**
      * Options for interpolating map parameters
      */
+    @Keep
     public enum EaseType {
         LINEAR,
         CUBIC,
@@ -44,6 +47,17 @@ public class MapController implements Renderer {
         PERSPECTIVE,
         ISOMETRIC,
         FLAT,
+    }
+
+    /**
+     * Options representing an error generated after from the map controller
+     */
+    public enum Error {
+        NONE,
+        SCENE_UPDATE_PATH_NOT_FOUND,
+        SCENE_UPDATE_PATH_YAML_SYNTAX_ERROR,
+        SCENE_UPDATE_VALUE_YAML_SYNTAX_ERROR,
+        NO_VALID_SCENE,
     }
 
     protected static EaseType DEFAULT_EASE_TYPE = EaseType.CUBIC;
@@ -67,7 +81,9 @@ public class MapController implements Renderer {
      * Interface for a callback to receive information about features picked from the map
      * Triggered after a call of {@link #pickFeature(float, float)}
      * Listener should be set with {@link #setFeaturePickListener(FeaturePickListener)}
+     * The callback will be run on the main (UI) thread.
      */
+    @Keep
     public interface FeaturePickListener {
         /**
          * Receive information about features found in a call to {@link #pickFeature(float, float)}
@@ -81,7 +97,9 @@ public class MapController implements Renderer {
      * Interface for a callback to receive information about labels picked from the map
      * Triggered after a call of {@link #pickLabel(float, float)}
      * Listener should be set with {@link #setLabelPickListener(LabelPickListener)}
+     * The callback will be run on the main (UI) thread.
      */
+    @Keep
     public interface LabelPickListener {
         /**
          * Receive information about labels found in a call to {@link #pickLabel(float, float)}
@@ -96,7 +114,9 @@ public class MapController implements Renderer {
      * Interface for a callback to receive the picked {@link Marker}
      * Triggered after a call of {@link #pickMarker(float, float)}
      * Listener should be set with {@link #setMarkerPickListener(MarkerPickListener)}
+     * The callback will be run on the main (UI) thread.
      */
+    @Keep
     public interface MarkerPickListener {
         /**
          * Receive information about marker found in a call to {@link #pickMarker(float, float)}
@@ -109,10 +129,28 @@ public class MapController implements Renderer {
 
     public interface ViewCompleteListener {
         /**
-         * Called on the render-thread at the end of whenever the view is fully loaded and
-         * no ease- or label-animation is running.
+         * Called on the UI thread at the end of whenever the view is stationary, fully loaded, and
+         * no animations are running.
          */
         void onViewComplete();
+    }
+
+    /**
+     * Interface for listening to scene load status information.
+     * Triggered after a call of {@link #updateSceneAsync(List<SceneUpdate>)} or
+     * {@link #loadSceneFileAsync(String, List<SceneUpdate>)} or {@link #loadSceneFile(String, List<SceneUpdate>)}
+     * Listener should be set with {@link #setSceneLoadListener(SceneLoadListener)}
+     * The callbacks will be run on the main (UI) thread.
+     */
+    @Keep
+    public interface SceneLoadListener {
+        /**
+         * Received when a scene load or update finishes. If sceneError is not null then the operation did not succeed.
+         * @param sceneId The identifier returned by {@link #updateSceneAsync(List<SceneUpdate>)} or
+         * {@link #loadSceneFileAsync(String, List<SceneUpdate>)}.
+         * @param sceneError A {@link SceneError} holding error information, or null if no error occurred.
+         */
+        void onSceneReady(int sceneId, SceneError sceneError);
     }
 
     /**
@@ -190,6 +228,8 @@ public class MapController implements Renderer {
         touchInput.setSimultaneousDetectionAllowed(Gestures.SHOVE, Gestures.SCALE, false);
         touchInput.setSimultaneousDetectionAllowed(Gestures.SHOVE, Gestures.PAN, false);
         touchInput.setSimultaneousDetectionAllowed(Gestures.SCALE, Gestures.LONG_PRESS, false);
+
+        uiThreadHandler = new Handler(view.getContext().getMainLooper());
     }
 
     /**
@@ -205,7 +245,7 @@ public class MapController implements Renderer {
 
         fontFileParser = new FontFileParser();
 
-        // Parse font file desription
+        // Parse font file description
         fontFileParser.parse();
 
         mapPointer = nativeInit(this, assetManager);
@@ -234,29 +274,126 @@ public class MapController implements Renderer {
         });
     }
 
-    static MapController getInstance(GLSurfaceView view) {
-        return new MapController(view);
-    }
-
     /**
-     * Load a new scene file
+     * Load a new scene file synchronously.
+     * Use {@link #setSceneLoadListener(SceneLoadListener)} for notification when the new scene is
+     * ready.
      * @param path Location of the YAML scene file within the application assets
+     * @return Scene ID An identifier for the scene being loaded, the same value will be passed to
+     * {@link SceneLoadListener#onSceneReady(int sceneId, SceneError sceneError)} when loading is complete.
      */
-    public void loadSceneFile(String path) {
-        loadSceneFile(path, null);
+    public int loadSceneFile(String path) {
+        return loadSceneFile(path, null);
     }
 
     /**
-     * Load a new scene file
+     * Load a new scene file asynchronously.
+     * Use {@link #setSceneLoadListener(SceneLoadListener)} for notification when the new scene is
+     * ready.
+     * @param path Location of the YAML scene file within the application assets
+     * @return Scene ID An identifier for the scene being loaded, the same value will be passed to
+     * {@link SceneLoadListener#onSceneReady(int sceneId, SceneError sceneError)} when loading is complete.
+     */
+    public int loadSceneFileAsync(String path) {
+        return loadSceneFileAsync(path, null);
+    }
+
+    /**
+     * Load a new scene file synchronously.
+     * If scene updates triggers an error, they won't be applied.
+     * Use {@link #setSceneLoadListener(SceneLoadListener)} for notification when the new scene is
+     * ready.
      * @param path Location of the YAML scene file within the application assets
      * @param sceneUpdates List of {@code SceneUpdate}
+     * @return Scene ID An identifier for the scene being loaded, the same value will be passed to
+     * {@link SceneLoadListener#onSceneReady(int sceneId, SceneError sceneError)} when loading is complete.
      */
-    public void loadSceneFile(String path, List<SceneUpdate> sceneUpdates) {
+    public int loadSceneFile(String path, List<SceneUpdate> sceneUpdates) {
         String[] updateStrings = bundleSceneUpdates(sceneUpdates);
-        scenePath = path;
         checkPointer(mapPointer);
-        nativeLoadScene(mapPointer, path, updateStrings);
+        int sceneId = nativeLoadScene(mapPointer, path, updateStrings);
+        removeAllMarkers();
         requestRender();
+        return sceneId;
+    }
+
+    /**
+     * Load a new scene file asynchronously.
+     * If scene updates triggers an error, they won't be applied.
+     * Use {@link #setSceneLoadListener(SceneLoadListener)} for notification when the new scene is
+     * ready.
+     * @param path Location of the YAML scene file within the application assets
+     * @param sceneUpdates List of {@code SceneUpdate}
+     * @return Scene ID An identifier for the scene being loaded, the same value will be passed to
+     * {@link SceneLoadListener#onSceneReady(int sceneId, SceneError sceneError)} when loading is complete.
+     */
+    public int loadSceneFileAsync(String path, List<SceneUpdate> sceneUpdates) {
+        String[] updateStrings = bundleSceneUpdates(sceneUpdates);
+        checkPointer(mapPointer);
+        int sceneId = nativeLoadSceneAsync(mapPointer, path, updateStrings);
+        removeAllMarkers();
+        requestRender();
+        return sceneId;
+    }
+
+    /**
+     * Load a new scene synchronously, provided an explicit yaml scene string to load
+     * If scene updates triggers an error, they won't be applied.
+     * Use {@link #setSceneLoadListener(SceneLoadListener)} for notification when the new scene is
+     * ready.
+     * @param yaml YAML scene String
+     * @param resourceRoot base path to resolve relative URLs
+     * @param sceneUpdates List of {@code SceneUpdate}
+     * @return Scene ID An identifier for the scene being loaded, the same value will be passed to
+     */
+    public int loadSceneYaml(String yaml, String resourceRoot, List<SceneUpdate> sceneUpdates) {
+        String[] updateStrings = bundleSceneUpdates(sceneUpdates);
+        checkPointer(mapPointer);
+        int sceneId = nativeLoadSceneYaml(mapPointer, yaml, resourceRoot, updateStrings);
+        removeAllMarkers();
+        requestRender();
+        return sceneId;
+    }
+
+    /**
+     * Load a new scene asynchronously, provided an explicit yaml scene string to load
+     * If scene updates triggers an error, they won't be applied.
+     * Use {@link #setSceneLoadListener(SceneLoadListener)} for notification when the new scene is
+     * ready.
+     * @param yaml YAML scene String
+     * @param resourceRoot base path to resolve relative URLs
+     * @param sceneUpdates List of {@code SceneUpdate}
+     * @return Scene ID An identifier for the scene being loaded, the same value will be passed to
+     */
+    public int loadSceneYamlAsync(String yaml, String resourceRoot, List<SceneUpdate> sceneUpdates) {
+        String[] updateStrings = bundleSceneUpdates(sceneUpdates);
+        checkPointer(mapPointer);
+        int sceneId = nativeLoadSceneYamlAsync(mapPointer, yaml, resourceRoot, updateStrings);
+        removeAllMarkers();
+        requestRender();
+        return sceneId;
+    }
+
+    /**
+     * Apply SceneUpdates to the current scene asyncronously
+     * If a updates trigger an error, scene updates won't be applied.
+     * Use {@link #setSceneLoadListener(SceneLoadListener)} for notification when the new scene is
+     * ready.
+     * @param sceneUpdates List of {@code SceneUpdate}
+     * @return new scene ID
+     */
+    public int updateSceneAsync(List<SceneUpdate> sceneUpdates) {
+        checkPointer(mapPointer);
+
+        if (sceneUpdates == null || sceneUpdates.size() == 0) {
+            throw new IllegalArgumentException("sceneUpdates can not be null or empty in queueSceneUpdates");
+        }
+
+        removeAllMarkers();
+
+        String[] updateStrings = bundleSceneUpdates(sceneUpdates);
+
+        return nativeUpdateScene(mapPointer, updateStrings);
     }
 
     /**
@@ -490,12 +627,27 @@ public class MapController implements Renderer {
      * object will be returned.
      */
     public MapData addDataLayer(String name) {
+        return addDataLayer(name, false);
+    }
+
+    /**
+     * Construct a collection of drawable map features.
+     * @param name The name of the data collection. Once added to a map, features from this
+     * @param generateCentroid boolean to control <a href=
+     * "https://mapzen.com/documentation/tangram/sources/#generate_label_centroids"> label centroid
+     * generation</a> for polygon geometry
+     * {@code MapData} will be available from a data source with this name, just like a data source
+     * specified in a scene file. You cannot create more than one data source with the same name.
+     * If you call {@code addDataLayer} with the same name more than once, the same {@code MapData}
+     * object will be returned.
+     */
+    public MapData addDataLayer(String name, boolean generateCentroid) {
         MapData mapData = clientTileSources.get(name);
         if (mapData != null) {
             return mapData;
         }
         checkPointer(mapPointer);
-        long pointer = nativeAddTileSource(mapPointer, name);
+        long pointer = nativeAddTileSource(mapPointer, name, generateCentroid);
         if (pointer <= 0) {
             throw new RuntimeException("Unable to create new data source");
         }
@@ -520,6 +672,7 @@ public class MapController implements Renderer {
      *
      * Typically this does not need to be called from outside Tangram, see {@link #setRenderMode(int)}.
      */
+    @Keep
     public void requestRender() {
         mapView.requestRender();
     }
@@ -531,6 +684,7 @@ public class MapController implements Renderer {
      * changes or when any animation in the map requires rendering.
      * @param renderMode Either 1, to render continuously, or 0, to render only when needed.
      */
+    @Keep
     public void setRenderMode(int renderMode) {
         mapView.setRenderMode(renderMode);
     }
@@ -686,24 +840,62 @@ public class MapController implements Renderer {
      * Set a listener for feature pick events
      * @param listener The {@link FeaturePickListener} to call
      */
-    public void setFeaturePickListener(FeaturePickListener listener) {
-        featurePickListener = listener;
+    public void setFeaturePickListener(final FeaturePickListener listener) {
+        featurePickListener = (listener == null) ? null : new FeaturePickListener() {
+            @Override
+            public void onFeaturePick(final Map<String, String> properties, final float positionX, final float positionY) {
+                uiThreadHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        listener.onFeaturePick(properties, positionX, positionY);
+                    }
+                });
+            }
+        };
+    }
+
+    /**
+     * Set a listener for scene update error statuses
+     * @param listener The {@link SceneLoadListener} to call after scene has loaded
+     */
+    public void setSceneLoadListener(final SceneLoadListener listener) {
+        sceneLoadListener = listener;
     }
 
     /**
      * Set a listener for label pick events
      * @param listener The {@link LabelPickListener} to call
      */
-    public void setLabelPickListener(LabelPickListener listener) {
-        labelPickListener = listener;
+    public void setLabelPickListener(final LabelPickListener listener) {
+        labelPickListener = (listener == null) ? null : new LabelPickListener() {
+            @Override
+            public void onLabelPick(final LabelPickResult labelPickResult, final float positionX, final float positionY) {
+                uiThreadHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        listener.onLabelPick(labelPickResult, positionX, positionY);
+                    }
+                });
+            }
+        };
     }
 
     /**
      * Set a listener for marker pick events
      * @param listener The {@link MarkerPickListener} to call
      */
-    public void setMarkerPickListener(MarkerPickListener listener) {
-        markerPickListener = listener;
+    public void setMarkerPickListener(final MarkerPickListener listener) {
+        markerPickListener = (listener == null) ? null : new MarkerPickListener() {
+            @Override
+            public void onMarkerPick(final MarkerPickResult markerPickResult, final float positionX, final float positionY) {
+                uiThreadHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        listener.onMarkerPick(markerPickResult, positionX, positionY);
+                    }
+                });
+            }
+        };
     }
 
     /**
@@ -778,12 +970,31 @@ public class MapController implements Renderer {
     public void removeAllMarkers() {
         checkPointer(mapPointer);
         nativeMarkerRemoveAll(mapPointer);
+
+        // Invalidate all markers so their ids are unusable
+        for (Marker marker : markers.values()) {
+            marker.invalidate();
+        }
+
+        markers.clear();
     }
 
     /**
+     * Set a listener for view complete events.
+     * @param listener The {@link ViewCompleteListener} to call when the view is complete
      */
-    public void setViewCompleteListener(ViewCompleteListener listener) {
-        viewCompleteListener = listener;
+    public void setViewCompleteListener(final ViewCompleteListener listener) {
+        viewCompleteListener = (listener == null) ? null : new ViewCompleteListener() {
+            @Override
+            public void onViewComplete() {
+                uiThreadHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        listener.onViewComplete();
+                    }
+                });
+            }
+        };
     }
 
     /**
@@ -804,39 +1015,6 @@ public class MapController implements Renderer {
     }
 
     /**
-     * Enqueue a scene component update with its corresponding YAML node value
-     * @param sceneUpdate A {@code SceneUpdate}
-     */
-    public void queueSceneUpdate(SceneUpdate sceneUpdate) {
-        checkPointer(mapPointer);
-        if (sceneUpdate == null) {
-            throw new IllegalArgumentException("sceneUpdate can not be null in queueSceneUpdates");
-        }
-        nativeQueueSceneUpdate(mapPointer, sceneUpdate.getPath(), sceneUpdate.getValue());
-    }
-
-    /**
-     * Enqueue a scene component update with its corresponding YAML node value
-     * @param sceneUpdates List of {@code SceneUpdate}
-     */
-    public void queueSceneUpdate(List<SceneUpdate> sceneUpdates) {
-        checkPointer(mapPointer);
-        if (sceneUpdates == null || sceneUpdates.size() == 0) {
-            throw new IllegalArgumentException("sceneUpdates can not be null or empty in queueSceneUpdates");
-        }
-        String[] updateStrings = bundleSceneUpdates(sceneUpdates);
-        nativeQueueSceneUpdates(mapPointer, updateStrings);
-    }
-
-    /**
-     * Apply updates queued by queueSceneUpdate; this empties the current queue of updates
-     */
-    public void applySceneUpdates() {
-        checkPointer(mapPointer);
-        nativeApplySceneUpdates(mapPointer);
-    }
-
-    /**
      * Set whether the OpenGL state will be cached between subsequent frames. This improves
      * rendering efficiency, but can cause errors if your application code makes OpenGL calls.
      * @param use Whether to use a cached OpenGL state; false by default
@@ -846,9 +1024,24 @@ public class MapController implements Renderer {
         nativeUseCachedGlState(mapPointer, use);
     }
 
+    /**
+     * Sets an opaque background color used as default color when a scene is being loaded
+     * @param red red component of the background color
+     * @param green green component of the background color
+     * @param blue blue component of the background color
+     */
+    public void setDefaultBackgroundColor(float red, float green, float blue) {
+        checkPointer(mapPointer);
+        nativeSetDefaultBackgroundColor(mapPointer, red, green, blue);
+    }
 
     // Package private methods
     // =======================
+
+    void onLowMemory() {
+        checkPointer(mapPointer);
+        nativeOnLowMemory(mapPointer);
+    }
 
     void removeTileSource(long sourcePtr) {
         checkPointer(mapPointer);
@@ -902,10 +1095,16 @@ public class MapController implements Renderer {
         return updateStrings;
     }
 
-    boolean setMarkerStyling(long markerId, String styleStr) {
+    boolean setMarkerStylingFromString(long markerId, String styleString) {
         checkPointer(mapPointer);
         checkId(markerId);
-        return nativeMarkerSetStyling(mapPointer, markerId, styleStr);
+        return nativeMarkerSetStylingFromString(mapPointer, markerId, styleString);
+    }
+
+    boolean setMarkerStylingFromPath(long markerId, String path) {
+        checkPointer(mapPointer);
+        checkId(markerId);
+        return nativeMarkerSetStylingFromPath(mapPointer, markerId, path);
     }
 
     boolean setMarkerBitmap(long markerId, int width, int height, int[] data) {
@@ -951,6 +1150,7 @@ public class MapController implements Renderer {
         return nativeMarkerSetDrawOrder(mapPointer, markerId, drawOrder);
     }
 
+    @Keep
     Marker markerById(long markerId) {
         return markers.get(markerId);
     }
@@ -959,12 +1159,17 @@ public class MapController implements Renderer {
     // ==============
 
     static {
+        System.loadLibrary("c++_shared");
         System.loadLibrary("tangram");
     }
 
+    private synchronized native void nativeOnLowMemory(long mapPtr);
     private synchronized native long nativeInit(MapController instance, AssetManager assetManager);
     private synchronized native void nativeDispose(long mapPtr);
-    private synchronized native void nativeLoadScene(long mapPtr, String path, String[] updateStrings);
+    private synchronized native int nativeLoadScene(long mapPtr, String path, String[] updateStrings);
+    private synchronized native int nativeLoadSceneAsync(long mapPtr, String path, String[] updateStrings);
+    private synchronized native int nativeLoadSceneYaml(long mapPtr, String yaml, String resourceRoot, String[] updateStrings);
+    private synchronized native int nativeLoadSceneYamlAsync(long mapPtr, String yaml, String resourceRoot, String[] updateStrings);
     private synchronized native void nativeSetupGL(long mapPtr);
     private synchronized native void nativeResize(long mapPtr, int width, int height);
     private synchronized native boolean nativeUpdate(long mapPtr, float dt);
@@ -993,16 +1198,15 @@ public class MapController implements Renderer {
     private synchronized native void nativeHandlePinchGesture(long mapPtr, float posX, float posY, float scale, float velocity);
     private synchronized native void nativeHandleRotateGesture(long mapPtr, float posX, float posY, float rotation);
     private synchronized native void nativeHandleShoveGesture(long mapPtr, float distance);
-    private synchronized native void nativeQueueSceneUpdate(long mapPtr, String componentPath, String componentValue);
-    private synchronized native void nativeQueueSceneUpdates(long mapPtr, String[] updateStrings);
-    private synchronized native void nativeApplySceneUpdates(long mapPtr);
+    private synchronized native int nativeUpdateScene(long mapPtr, String[] updateStrings);
     private synchronized native void nativeSetPickRadius(long mapPtr, float radius);
     private synchronized native void nativePickFeature(long mapPtr, float posX, float posY, FeaturePickListener listener);
     private synchronized native void nativePickLabel(long mapPtr, float posX, float posY, LabelPickListener listener);
     private synchronized native void nativePickMarker(MapController instance, long mapPtr, float posX, float posY, MarkerPickListener listener);
     private synchronized native long nativeMarkerAdd(long mapPtr);
     private synchronized native boolean nativeMarkerRemove(long mapPtr, long markerID);
-    private synchronized native boolean nativeMarkerSetStyling(long mapPtr, long markerID, String styling);
+    private synchronized native boolean nativeMarkerSetStylingFromString(long mapPtr, long markerID, String styling);
+    private synchronized native boolean nativeMarkerSetStylingFromPath(long mapPtr, long markerID, String path);
     private synchronized native boolean nativeMarkerSetBitmap(long mapPtr, long markerID, int width, int height, int[] data);
     private synchronized native boolean nativeMarkerSetPoint(long mapPtr, long markerID, double lng, double lat);
     private synchronized native boolean nativeMarkerSetPointEased(long mapPtr, long markerID, double lng, double lat, float duration, int ease);
@@ -1015,10 +1219,11 @@ public class MapController implements Renderer {
     private synchronized native void nativeUseCachedGlState(long mapPtr, boolean use);
     private synchronized native void nativeCaptureSnapshot(long mapPtr, int[] buffer);
 
-    private native void nativeOnUrlSuccess(byte[] rawDataBytes, long callbackPtr);
-    private native void nativeOnUrlFailure(long callbackPtr);
+    private synchronized native void nativeSetDefaultBackgroundColor(long mapPtr, float r, float g, float b);
 
-    synchronized native long nativeAddTileSource(long mapPtr, String name);
+    private native void nativeOnUrlComplete(long mapPtr, long requestHandle, byte[] rawDataBytes, String errorMessage);
+
+    synchronized native long nativeAddTileSource(long mapPtr, String name, boolean generateCentroid);
     synchronized native void nativeRemoveTileSource(long mapPtr, long sourcePtr);
     synchronized native void nativeClearTileSource(long mapPtr, long sourcePtr);
     synchronized native void nativeAddFeature(long mapPtr, long sourcePtr, double[] coordinates, int[] rings, String[] properties);
@@ -1029,7 +1234,6 @@ public class MapController implements Renderer {
     // Private members
     // ===============
 
-    private String scenePath;
     private long mapPointer;
     private long time = System.nanoTime();
     private GLSurfaceView mapView;
@@ -1039,6 +1243,7 @@ public class MapController implements Renderer {
     private DisplayMetrics displayMetrics = new DisplayMetrics();
     private HttpHandler httpHandler;
     private FeaturePickListener featurePickListener;
+    private SceneLoadListener sceneLoadListener;
     private LabelPickListener labelPickListener;
     private MarkerPickListener markerPickListener;
     private ViewCompleteListener viewCompleteListener;
@@ -1046,6 +1251,7 @@ public class MapController implements Renderer {
     private boolean frameCaptureAwaitCompleteView;
     private Map<String, MapData> clientTileSources = new HashMap<>();
     private Map<Long, Marker> markers = new HashMap<>();
+    private Handler uiThreadHandler;
 
     // GLSurfaceView.Renderer methods
     // ==============================
@@ -1062,11 +1268,17 @@ public class MapController implements Renderer {
             return;
         }
 
-        boolean viewComplete = nativeUpdate(mapPointer, delta);
-        nativeRender(mapPointer);
+        boolean viewComplete;
+        synchronized(this) {
+            viewComplete = nativeUpdate(mapPointer, delta);
+            nativeRender(mapPointer);
+        }
 
-        if (viewComplete && viewCompleteListener != null) {
-            viewCompleteListener.onViewComplete();
+        if (viewComplete) {
+
+            if (viewCompleteListener != null) {
+                viewCompleteListener.onViewComplete();
+            }
         }
         if (frameCaptureCallback != null) {
             if (!frameCaptureAwaitCompleteView || viewComplete) {
@@ -1078,57 +1290,90 @@ public class MapController implements Renderer {
 
     @Override
     public void onSurfaceChanged(GL10 gl, int width, int height) {
+
+        if (mapPointer <= 0) {
+            // No native instance is initialized, so stop here. This can happen during Activity
+            // shutdown when the map has been disposed but the View hasn't been destroyed yet.
+            return;
+        }
+
         nativeSetPixelScale(mapPointer, displayMetrics.density);
         nativeResize(mapPointer, width, height);
     }
 
     @Override
     public void onSurfaceCreated(GL10 gl, EGLConfig config) {
+
+        if (mapPointer <= 0) {
+            // No native instance is initialized, so stop here. This can happen during Activity
+            // shutdown when the map has been disposed but the View hasn't been destroyed yet.
+            return;
+        }
+
         nativeSetupGL(mapPointer);
     }
 
     // Networking methods
     // ==================
-
-    void cancelUrlRequest(String url) {
+    @Keep
+    void cancelUrlRequest(long requestHandle) {
         if (httpHandler == null) {
             return;
         }
-        httpHandler.onCancel(url);
+        httpHandler.onCancel(requestHandle);
     }
 
-    boolean startUrlRequest(String url, final long callbackPtr) throws Exception {
+    @Keep
+    void startUrlRequest(final String url, final long requestHandle) {
         if (httpHandler == null) {
-            return false;
+            return;
         }
 
-        httpHandler.onRequest(url, new Callback() {
+        Callback callback = new Callback() {
             @Override
             public void onFailure(Call call, IOException e) {
-                nativeOnUrlFailure(callbackPtr);
+                nativeOnUrlComplete(mapPointer, requestHandle, null, e.getMessage());
             }
 
             @Override
             public void onResponse(Call call, Response response) throws IOException {
+
                 if (!response.isSuccessful()) {
-                    nativeOnUrlFailure(callbackPtr);
-                    throw new IOException("Unexpected response code: " + response);
+                    nativeOnUrlComplete(mapPointer, requestHandle, null, response.message());
+                    throw new IOException("Unexpected response code: " + response + " for URL: " + url);
                 }
                 byte[] bytes = response.body().bytes();
-                nativeOnUrlSuccess(bytes, callbackPtr);
+                nativeOnUrlComplete(mapPointer, requestHandle, bytes, null);
             }
-        });
-        return true;
+        };
+
+        httpHandler.onRequest(url, callback, requestHandle);
+    }
+
+    // Called from JNI on worker or render-thread.
+    void sceneReadyCallback(final int sceneId, final SceneError error) {
+
+        final SceneLoadListener cb = sceneLoadListener;
+        if (cb != null) {
+            uiThreadHandler.post(new Runnable() {
+                @Override
+                public void run() {
+                    cb.onSceneReady(sceneId, error);
+                }
+            });
+        }
     }
 
     // Font Fetching
     // =============
+    @Keep
     String getFontFilePath(String key) {
 
         return fontFileParser.getFontFile(key);
 
     }
 
+    @Keep
     String getFontFallbackFilePath(int importance, int weightHint) {
 
         return fontFileParser.getFontFallback(importance, weightHint);

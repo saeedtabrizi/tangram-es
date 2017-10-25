@@ -8,7 +8,7 @@ TEST_CASE("Parse components of a correctly formatted URL", "[Url]") {
 
     // Tests conformance to https://tools.ietf.org/html/rfc1808#section-2.1
 
-    Url url("https://vector.mapzen.com/osm/all/0/0/0.mvt;param=val?api_key=mapsRcool#yolo");
+    Url url("https://some.domain:9000/path/to/file.html;param=val?api_key=mapsRcool#yolo");
 
     CHECK(!url.isEmpty());
     CHECK(url.isAbsolute());
@@ -19,9 +19,9 @@ TEST_CASE("Parse components of a correctly formatted URL", "[Url]") {
     CHECK(url.hasScheme());
     CHECK(url.scheme() == "https");
     CHECK(url.hasNetLocation());
-    CHECK(url.netLocation() == "vector.mapzen.com");
+    CHECK(url.netLocation() == "some.domain:9000");
     CHECK(url.hasPath());
-    CHECK(url.path() == "/osm/all/0/0/0.mvt");
+    CHECK(url.path() == "/path/to/file.html");
     CHECK(url.hasParameters());
     CHECK(url.parameters() == "param=val");
     CHECK(url.hasQuery());
@@ -48,6 +48,7 @@ TEST_CASE("Parse components of a correctly formatted data URI", "[Url]") {
     CHECK(url.hasScheme());
     CHECK(url.scheme() == "data");
     CHECK(!url.hasNetLocation());
+    CHECK(!url.hasPath());
     CHECK(!url.hasParameters());
     CHECK(!url.hasQuery());
     CHECK(!url.hasFragment());
@@ -215,6 +216,33 @@ TEST_CASE("Resolve an abnormal relative URL against an absolute base URL", "[Url
     CHECK(Url("g/../h").resolved(base).string() == "http://a/b/c/h");
     CHECK(Url("g;x=1/./y").resolved(base).string() == "http://a/b/c/g;x=1/./y"); // See [1] below.
     CHECK(Url("g;x=1/../y").resolved(base).string() == "http://a/b/c/g;x=1/../y"); // See [1] below.
+
+}
+
+TEST_CASE("Retrieve the file extension from a path string", "[Url]") {
+
+    CHECK(Url::getPathExtension("file.txt") == "txt");
+    CHECK(Url::getPathExtension("file.txt.gz") == "gz");
+    CHECK(Url::getPathExtension("/path/to/a/file.txt") == "txt");
+    CHECK(Url::getPathExtension("/path/to/some/other/.././file.txt") == "txt");
+    CHECK(Url::getPathExtension("/path/to/some/other/.././folder") == "");
+    CHECK(Url::getPathExtension("/path/to/a/file") == "");
+    CHECK(Url::getPathExtension("/path/to/a/.txt") == "");
+    CHECK(Url::getPathExtension("/path/to/a/file.") == "");
+
+}
+
+TEST_CASE("Escape reserved characters in strings with %-encoding") {
+
+    CHECK(Url::escapeReservedCharacters("non-reserved") == "non-reserved");
+    CHECK(Url::escapeReservedCharacters("some reserved") == "some%20reserved");
+    CHECK(Url::escapeReservedCharacters("🍩") == "%F0%9F%8D%A9");
+    CHECK(Url::escapeReservedCharacters("도넛") == "%EB%8F%84%EB%84%9B");
+
+    CHECK(Url::unEscapeReservedCharacters("non-reserved") == "non-reserved");
+    CHECK(Url::unEscapeReservedCharacters("some%20reserved") == "some reserved");
+    CHECK(Url::unEscapeReservedCharacters("%F0%9F%8D%A9") == "🍩");
+    CHECK(Url::unEscapeReservedCharacters("%EB%8F%84%EB%84%9B") == "도넛");
 
 }
 

@@ -1,22 +1,26 @@
 #include "catch.hpp"
 
+#include "log.h"
+#include "mockPlatform.h"
+#include "scene/filters.h"
+#include "scene/importer.h"
+#include "scene/scene.h"
+#include "scene/sceneLoader.h"
+#include "util/variant.h"
+
+#include "yaml-cpp/yaml.h"
+
 #include <iostream>
 #include <vector>
 #include <string>
-
-#include "yaml-cpp/yaml.h"
-#include "scene/filters.h"
-#include "scene/sceneLoader.h"
-#include "scene/scene.h"
-#include "util/variant.h"
-#include "platform_mock.h"
+#include <unordered_map>
 
 using namespace Tangram;
 using YAML::Node;
 
 TEST_CASE( "Style Uniforms Parsing and Injection Test: Float uniform value", "[StyleUniforms][core][yaml]") {
     std::shared_ptr<Platform> platform = std::make_shared<MockPlatform>();
-    std::shared_ptr<Scene> scene = std::make_shared<Scene>(platform);
+    std::shared_ptr<Scene> scene = std::make_shared<Scene>(platform, Url());
 
     Node node = YAML::Load(R"END(
         u_float: 0.5
@@ -32,7 +36,7 @@ TEST_CASE( "Style Uniforms Parsing and Injection Test: Float uniform value", "[S
 
 TEST_CASE( "Style Uniforms Parsing and Injection Test: Boolean uniform value", "[StyleUniforms][core][yaml]") {
     std::shared_ptr<Platform> platform = std::make_shared<MockPlatform>();
-    std::shared_ptr<Scene> scene = std::make_shared<Scene>(platform);
+    std::shared_ptr<Scene> scene = std::make_shared<Scene>(platform, Url());
 
     Node node = YAML::Load(R"END(
         u_true: true
@@ -54,7 +58,7 @@ TEST_CASE( "Style Uniforms Parsing and Injection Test: Boolean uniform value", "
 
 TEST_CASE( "Style Uniforms Parsing and Injection Test: vec2, vec3, vec4 uniform value", "[StyleUniforms][core][yaml]") {
     std::shared_ptr<Platform> platform = std::make_shared<MockPlatform>();
-    std::shared_ptr<Scene> scene = std::make_shared<Scene>(platform);
+    std::shared_ptr<Scene> scene = std::make_shared<Scene>(platform, Url());
 
     Node node = YAML::Load(R"END(
         u_vec2: [0.1, 0.2]
@@ -96,13 +100,14 @@ TEST_CASE( "Style Uniforms Parsing and Injection Test: vec2, vec3, vec4 uniform 
 }
 
 TEST_CASE( "Style Uniforms Parsing and Injection Test: textures uniform value", "[StyleUniforms][core][yaml]") {
+    std::unordered_map<Url, std::string> testScenes;
     std::shared_ptr<Platform> platform = std::make_shared<MockPlatform>();
-    std::shared_ptr<Scene> scene = std::make_shared<Scene>(platform);
+    std::shared_ptr<Scene> scene = std::make_shared<Scene>(platform, Url());
 
     Node node = YAML::Load(R"END(
-        u_tex : img/cross.png
-        u_tex2 : [img/cross.png, img/normals.jpg, img/sem.jpg]
-        )END");
+        u_tex: img/cross.png
+        u_tex2: [img/cross.png, img/normals.jpg, img/sem.jpg]
+    )END");
 
     StyleUniform uniformValues;
 
@@ -118,23 +123,3 @@ TEST_CASE( "Style Uniforms Parsing and Injection Test: textures uniform value", 
     REQUIRE(uniformValues.value.get<UniformTextureArray>().names[1] == "img/normals.jpg");
     REQUIRE(uniformValues.value.get<UniformTextureArray>().names[2] == "img/sem.jpg");
 }
-
-TEST_CASE( "Style Uniforms Parsing failure Tests: textures uniform value", "[StyleUniforms][core][yaml]") {
-    std::shared_ptr<Platform> platform = std::make_shared<MockPlatform>();
-    std::shared_ptr<Scene> scene = std::make_shared<Scene>(platform);
-
-    Node node = YAML::Load(R"END(
-        u_tex : not_a_texture
-        u_tex2 : [not_a_texture_path2, not_a_texture_path_1]
-        u_uniform_float0: 0.5f
-        u_uniform_float1: 0s.5
-        )END");
-
-    StyleUniform uniformValues;
-
-    REQUIRE(!SceneLoader::parseStyleUniforms(platform, node["u_tex"], scene, uniformValues));
-    REQUIRE(!SceneLoader::parseStyleUniforms(platform, node["u_tex2"], scene, uniformValues));
-    REQUIRE(!SceneLoader::parseStyleUniforms(platform, node["u_uniform_float0"], scene, uniformValues));
-    REQUIRE(!SceneLoader::parseStyleUniforms(platform, node["u_uniform_float1"], scene, uniformValues));
-}
-

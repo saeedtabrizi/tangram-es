@@ -22,6 +22,35 @@ class TileSource : public std::enable_shared_from_this<TileSource> {
 
 public:
 
+    struct ZoomOptions {
+
+        ZoomOptions(int32_t _minDisplayZoom, int32_t _maxDisplayZoom,
+                      int32_t _maxZoom, int32_t _zoomBias)
+            : minDisplayZoom(_minDisplayZoom), maxDisplayZoom(_maxDisplayZoom),
+              maxZoom(_maxZoom), zoomBias(_zoomBias) {}
+
+        ZoomOptions() {}
+
+        // Minimum zoom for which tiles will be displayed
+        int32_t minDisplayZoom = -1;
+        // Maximum zoom for which tiles will be displayed
+        int32_t maxDisplayZoom = -1;
+        // Maximum zoom for which tiles will be requested
+        int32_t maxZoom = 18;
+        // controls the zoom level for the tiles of the tilesource to scale the tiles to
+        // apt pixel
+        // 0: 256 pixel tiles
+        // 1: 512 pixel tiles
+        int32_t zoomBias = 0;
+    };
+
+    /* Calculate the zoom level bias to be applied given tileSize in pixel units.
+     * 256  pixel -> 0
+     * 512  pixel -> 1
+     * 1024 pixel -> 2
+     */
+    static int32_t zoomBiasFromTileSize(int32_t tileSize);
+
     struct DataSource {
         virtual ~DataSource() {}
 
@@ -42,20 +71,26 @@ public:
         int level = 0;
     };
 
+    enum class Format {
+        GeoJson,
+        TopoJson,
+        Mvt,
+    };
+
     /* Tile data sources must have a name and a URL template that defines where to find
      * a tile based on its coordinates. A URL template includes exactly one occurrance
      * each of '{x}', '{y}', and '{z}' which will be replaced by the x index, y index,
      * and zoom level of tiles to produce their URL.
      */
     TileSource(const std::string& _name, std::unique_ptr<DataSource> _sources,
-               int32_t _minDisplayZoom = -1, int32_t _maxDisplayZoom = -1, int32_t _maxZoom = 18);
+               ZoomOptions _zoomOptions = {});
 
     virtual ~TileSource();
 
     /**
      * @return the mime-type of the DataSource.
      */
-    virtual const char* mimeType() = 0;
+    virtual const char* mimeType() const;
 
     /* Fetches data for the map tile specified by @_tileID
      *
@@ -69,7 +104,7 @@ public:
     virtual void cancelLoadingTile(const TileID& _tile);
 
     /* Parse a <TileTask> with data into a <TileData>, returning an empty TileData on failure */
-    virtual std::shared_ptr<TileData> parse(const TileTask& _task, const MapProjection& _projection) const = 0;
+    virtual std::shared_ptr<TileData> parse(const TileTask& _task, const MapProjection& _projection) const;
 
     /* Clears all data associated with this TileSource */
     virtual void clearData();
@@ -79,8 +114,6 @@ public:
     virtual void clearRasters();
     virtual void clearRaster(const TileID& id);
 
-    bool equals(const TileSource& _other) const;
-
     virtual std::shared_ptr<TileTask> createTask(TileID _tile, int _subTask = -1);
 
     /* ID of this TileSource instance */
@@ -89,12 +122,15 @@ public:
     /* Generation ID of TileSource state (incremented for each update, e.g. on clearData()) */
     int64_t generation() const { return m_generation; }
 
-    int32_t minDisplayZoom() const { return m_minDisplayZoom; }
-    int32_t maxDisplayZoom() const { return m_maxDisplayZoom; }
-    int32_t maxZoom() const { return m_maxZoom; }
+    const ZoomOptions& zoomOptions() { return m_zoomOptions; }
+    int32_t minDisplayZoom() const { return m_zoomOptions.minDisplayZoom; }
+    int32_t maxDisplayZoom() const { return m_zoomOptions.maxDisplayZoom; }
+    int32_t maxZoom() const { return m_zoomOptions.maxZoom; }
+    int32_t zoomBias() const { return m_zoomOptions.zoomBias; }
 
     bool isActiveForZoom(const float _zoom) const {
-        return _zoom >= m_minDisplayZoom && (m_maxDisplayZoom == -1 || _zoom <= m_maxDisplayZoom);
+        return _zoom >= m_zoomOptions.minDisplayZoom &&
+            (m_zoomOptions.maxDisplayZoom == -1 || _zoom <= m_zoomOptions.maxDisplayZoom);
     }
 
     /* assign/get raster datasources to this datasource */
@@ -108,6 +144,8 @@ public:
     /* Avoid RTTI by adding a boolean check on the data source object */
     virtual bool isRaster() const { return false; }
 
+    void setFormat(Format format) { m_format = format; }
+
 protected:
 
     void createSubTasks(std::shared_ptr<TileTask> _task);
@@ -118,26 +156,16 @@ protected:
     // Name used to identify this source in the style sheet
     std::string m_name;
 
-    // URL template for requesting tiles from a network or filesystem
-    std::string m_urlTemplate;
-
-    // The path to an mbtiles tile store. Empty string if not present.
-    std::string m_mbtilesPath;
-
-    // Minimum zoom for which tiles will be displayed
-    int32_t m_minDisplayZoom;
-
-    // Maximum zoom for which tiles will be displayed
-    int32_t m_maxDisplayZoom;
-
-    // Maximum zoom for which tiles will be requested
-    int32_t m_maxZoom;
+    // zoom dependent props
+    ZoomOptions m_zoomOptions;
 
     // Unique id for TileSource
     int32_t m_id;
 
     // Generation of dynamic TileSource state (incremented for each update)
     int64_t m_generation = 1;
+
+    Format m_format = Format::GeoJson;
 
     /* vector of raster sources (as raster samplers) referenced by this datasource */
     std::vector<std::shared_ptr<TileSource>> m_rasterSources;

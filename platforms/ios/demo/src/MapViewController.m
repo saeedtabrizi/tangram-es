@@ -9,21 +9,32 @@
 
 @interface MapViewController ()
 
-@property (assign, nonatomic) TGMapMarkerId polyline;
-@property (assign, nonatomic) TGMapMarkerId polygon;
+@property (assign, nonatomic) TGMarker* markerPolygon;
+@property (strong, nonatomic) TGMapData* mapData;
+
+- (void)addAlert:(NSString *)message withTitle:(NSString *)title;
 
 @end
 
 @implementation MapViewControllerDelegate
 
+- (void)mapView:(TGMapViewController *)view didCaptureScreenshot:(UIImage *)screenshot
+{
+    NSLog(@"Did capture screenshot");
+}
+
 - (void)mapViewDidCompleteLoading:(TGMapViewController *)mapView
 {
     NSLog(@"Did complete view");
+    // [mapView captureScreenshot:YES];
 }
 
-- (void)mapView:(TGMapViewController *)mapView didLoadSceneAsync:(NSString *)scene
+- (void)mapView:(TGMapViewController *)mapView didLoadScene:(int)sceneID withError:(nullable NSError *)sceneError
 {
-    NSLog(@"Did load scene async %@", scene);
+    if (sceneError) {
+        NSLog(@"Scene Ready with error %@", sceneError);
+        return;
+    }
 
     TGGeoPoint newYork;
     newYork.longitude = -74.00976419448854;
@@ -35,6 +46,10 @@
 
     [mapView setZoom:15];
     [mapView setPosition:newYork];
+
+    // Add a client data source, named 'mz_route_line_transit'
+    MapViewController* vc = (MapViewController *)mapView;
+    vc.mapData = [mapView addDataLayer:@"mz_route_line_transit"];
 }
 
 - (void)mapView:(TGMapViewController *)mapView didSelectMarker:(TGMarkerPickResult *)markerPickResult atScreenPosition:(TGGeoPoint)position;
@@ -43,14 +58,11 @@
         return;
     }
 
-    NSString* message = [NSString stringWithFormat:@"Marker %d", markerPickResult.identifier];
+    NSString* message = [NSString stringWithFormat:@"Marker %f %f",
+        markerPickResult.marker.point.latitude,
+        markerPickResult.marker.point.longitude];
 
-    UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Marker pick callback"
-                                                    message:message
-                                                   delegate:nil
-                                          cancelButtonTitle:@"OK"
-                                          otherButtonTitles:nil];
-    [alert show];
+    [(MapViewController*)mapView addAlert:message withTitle:@"Marker pick callback"];
 }
 
 - (void)mapView:(TGMapViewController *)mapView didSelectLabel:(TGLabelPickResult *)labelPickResult atScreenPosition:(CGPoint)position
@@ -63,12 +75,7 @@
         NSLog(@"\t%@ -- %@", key, [[labelPickResult properties] objectForKey:key]);
 
         if ([key isEqualToString:@"name"]) {
-             UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Label selection callback"
-                                                             message:[[labelPickResult properties] objectForKey:key]
-                                                            delegate:nil
-                                                   cancelButtonTitle:@"OK"
-                                                   otherButtonTitles:nil];
-             [alert show];
+            [(MapViewController*)mapView addAlert:[[labelPickResult properties] objectForKey:key] withTitle:@"Label selection callback"];
         }
     }
 }
@@ -84,12 +91,7 @@
         NSLog(@"\t%@ -- %@", key, [feature objectForKey:key]);
 
         if ([key isEqualToString:@"name"]) {
-             UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"Feature selection callback"
-                                                             message:[feature objectForKey:key]
-                                                            delegate:nil
-                                                   cancelButtonTitle:@"OK"
-                                                   otherButtonTitles:nil];
-             [alert show];
+            [(MapViewController*)mapView addAlert:[[feature objectForKey:key] objectForKey:key] withTitle:@"Feature selection callback"];
         }
     }
 }
@@ -104,57 +106,56 @@
 
     MapViewController* vc = (MapViewController *)view;
 
-    TGGeoPoint coordinate = [vc screenPositionToLngLat:location];
+    TGGeoPoint coordinates = [vc screenPositionToLngLat:location];
 
-    // Add polyline marker
+    // Add polyline data layer
     {
-        if (!vc.polyline) {
-            vc.polyline = [vc markerAdd];
-            [vc markerSetStyling:vc.polyline styling:@"{ style: 'lines', color: 'red', width: 20px, order: 500 }"];
+        TGFeatureProperties* properties = @{ @"type" : @"line", @"color" : @"#D2655F" };
+        static TGGeoPoint lastCoordinates = {NAN, NAN};
+
+        if (!isnan(lastCoordinates.latitude)) {
+            TGGeoPolyline* line = [[TGGeoPolyline alloc] init];
+
+            [line addPoint:lastCoordinates];
+            [line addPoint:coordinates];
+
+            [vc.mapData addPolyline:line withProperties:properties];
         }
 
-        static TGGeoPolyline* line = nil;
-        if (!line) { line = [[TGGeoPolyline alloc] init]; }
-
-        if ([line count] > 0) {
-            [line addPoint:coordinate];
-            [vc markerSetPolyline:vc.polyline polyline:line];
-        } else {
-            [line addPoint:coordinate];
-        }
+        lastCoordinates = coordinates;
     }
 
     // Add polygon marker
     {
-        if (!vc.polygon) {
-            vc.polygon = [vc markerAdd];
-            [vc markerSetStyling:vc.polygon styling:@" { style: 'polygons', color: 'blue', order: 500 } "];
+        if (!vc.markerPolygon) {
+            vc.markerPolygon = [view markerAdd];
+            vc.markerPolygon.stylingString = @"{ style: 'polygons', color: 'blue', order: 500 }";
         }
-
         static TGGeoPolygon* polygon = nil;
         if (!polygon) { polygon = [[TGGeoPolygon alloc] init]; }
 
         if ([polygon count] == 0) {
-            [polygon startPath:coordinate withSize:5];
+            [polygon startPath:coordinates withSize:5];
         } else if ([polygon count] % 5 == 0) {
-            [vc markerSetPolygon:vc.polygon polygon:polygon];
+            vc.markerPolygon.polygon = polygon;
             [polygon removeAll];
-            [polygon startPath:coordinate withSize:5];
+            [polygon startPath:coordinates withSize:5];
         } else {
-            [polygon addPoint:coordinate];
+            [polygon addPoint:coordinates];
         }
     }
 
     // Add point marker
     {
-        TGMapMarkerId mid = [vc markerAdd];
-        [vc markerSetStyling:mid styling:@"{ style: 'points', color: 'white', size: [25px, 25px], order:500, collide: false }"];
-        [vc markerSetPoint:mid coordinates:coordinate];
+        TGMarker* markerPoint = [view markerAdd];
+        markerPoint.stylingString = @"{ style: 'points', color: 'white', size: [25px, 25px], collide: false }";
+        markerPoint.point = coordinates;
     }
 
     // Request feature picking
     [vc pickFeatureAt:location];
     [vc pickLabelAt:location];
+    // [vc pickMarkerAt:location];
 }
 
 - (void)mapView:(TGMapViewController *)view recognizer:(UIGestureRecognizer *)recognizer didRecognizeLongPressGesture:(CGPoint)location
@@ -166,9 +167,30 @@
 
 @implementation MapViewController
 
+- (void)addAlert:(NSString *)message withTitle:(NSString *)title
+{
+    UIAlertController *alert = [[UIAlertController alloc] init];
+
+    alert.title = title;
+    alert.message = message;
+
+    UIAlertAction* okAction = [UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil];
+    [alert addAction:okAction];
+
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
 - (void)viewWillAppear:(BOOL)animated
 {
-    [super loadSceneFileAsync:@"https://tangrams.github.io/walkabout-style/walkabout-style.yaml"];
+    NSString* configPListPath = [[NSBundle mainBundle] pathForResource: @"Config" ofType: @"plist"];
+    NSMutableDictionary* configDict =[[NSMutableDictionary alloc] initWithContentsOfFile:configPListPath];
+    NSString* apiKey = [configDict valueForKey:@"MapzenApiKey"];
+    NSAssert(apiKey, @"Please provide a valid API key by setting the environment variable MAPZEN_API_KEY at build time");
+
+    NSMutableArray<TGSceneUpdate *>* updates = [[NSMutableArray alloc]init];
+    [updates addObject:[[TGSceneUpdate alloc]initWithPath:@"global.sdk_mapzen_api_key" value:apiKey]];
+
+    [super loadSceneAsyncFromURL:[NSURL URLWithString:@"https://tangrams.github.io/walkabout-style/walkabout-style.yaml"] withUpdates:updates];
 }
 
 - (void)viewDidLoad
@@ -177,9 +199,6 @@
 
     self.mapViewDelegate = [[MapViewControllerDelegate alloc] init];
     self.gestureDelegate = [[MapViewControllerRecognizerDelegate alloc] init];
-
-    self.polyline = 0;
-    self.polygon = 0;
 }
 
 - (void)didReceiveMemoryWarning

@@ -1,7 +1,10 @@
 #include "util/yamlHelper.h"
 
+#include "util/floatFormatter.h"
 #include "log.h"
 #include "csscolorparser.hpp"
+
+#include <cmath>
 
 #define MAP_DELIM '.'
 #define SEQ_DELIM '#'
@@ -49,30 +52,40 @@ YamlPath YamlPath::add(const std::string& key) {
     return YamlPath(codedPath + MAP_DELIM + key);
 }
 
-YAML::Node YamlPath::get(YAML::Node node) {
+bool YamlPath::get(YAML::Node root, YAML::Node& out) {
     size_t beginToken = 0, endToken = 0, pathSize = codedPath.size();
     auto delimiter = MAP_DELIM; // First token must be a map key.
     while (endToken < pathSize) {
+        if (!root.IsDefined()) {
+            return false; // A node before the end of the path was mising, quit!
+        }
         beginToken = endToken;
         endToken = pathSize;
         endToken = std::min(endToken, codedPath.find(SEQ_DELIM, beginToken));
         endToken = std::min(endToken, codedPath.find(MAP_DELIM, beginToken));
         if (delimiter == SEQ_DELIM) {
             int index = std::stoi(&codedPath[beginToken]);
-            node.reset(node[index]);
+            if (root.IsSequence()) {
+                root.reset(root[index]);
+            } else {
+                return false;
+            }
         } else if (delimiter == MAP_DELIM) {
             auto key = codedPath.substr(beginToken, endToken - beginToken);
-            node.reset(node[key]);
+            if (root.IsMap()) {
+                root.reset(root[key]);
+            } else {
+                return false;
+            }
         } else {
-            return Node(); // Path is malformed, return null node.
+            return false; // Path is malformed, return null node.
         }
         delimiter = codedPath[endToken]; // Get next character as the delimiter.
         ++endToken; // Move past the delimiter.
-        if (endToken < pathSize && !node) {
-            return Node(); // A node in the path was missing, return null node.
-        }
     }
-    return node;
+    // Success! Assign the result.
+    out.reset(root);
+    return true;
 }
 
 glm::vec4 getColorAsVec4(const Node& node) {
@@ -111,9 +124,9 @@ bool getDouble(const Node& node, double& value) {
 
     if (node.IsScalar()) {
         const std::string& s = node.Scalar();
-        char* pos;
-        value = strtod(s.c_str(), &pos);
-        if (pos == s.c_str() + s.length()) {
+        int count;
+        value = ff::stod(s.c_str(), s.length(), &count);
+        if (count == int(s.length())) {
             return true;
         }
     }

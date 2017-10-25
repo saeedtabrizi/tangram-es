@@ -12,10 +12,10 @@ namespace Tangram {
 //
 // URLs are decomposed as:
 //
-// foo://user:pword@host.com:80/over/there;type=a?name=ferret#nose
-// \_/   \____________________/\_________/ \____/ \_________/ \__/
-//  |              |               |         |         |       |
-// scheme      netLocation        path   parameters  query  fragment
+// foo://user:pword@host.com:80/over/there.txt;type=a?name=ferret#nose
+// \_/   \____________________/\_____________/ \____/ \_________/ \__/
+//  |              |                  |          |        |        |
+// scheme      netLocation           path   parameters  query  fragment
 //
 // Data URIs are decomposed as:
 //
@@ -106,6 +106,23 @@ public:
     // and return a modified copy of the string.
     static std::string removeDotSegmentsFromString(std::string path);
 
+    // Get the file extension for a path. The extension may be empty.
+    // e.g. getPathExtension("example.com/a/b/c.txt") == "txt"
+    static std::string getPathExtension(const std::string& path);
+
+    // Returns true if the given character has a reserved purpose in URI syntax
+    // according to https://tools.ietf.org/html/rfc3986#section-2.3
+    static bool isReservedCharacter(unsigned char in);
+
+    // Returns a copy of the input with all reserved characters replaced with
+    // percent-encoded escape sequences, as described in
+    // https://tools.ietf.org/html/rfc3986#section-2.1
+    static std::string escapeReservedCharacters(const std::string& in);
+
+    // Returns a copy of the input with all percent-encoded escape sequences
+    // replaced with the corresponding UTF-8 characters.
+    static std::string unEscapeReservedCharacters(const std::string& in);
+
 private:
 
     // buffer contains the actual text of the URL.
@@ -114,7 +131,7 @@ private:
     // parts describes URL components by their location within the buffer.
     struct Parts {
         struct Range {
-            size_t start = 0, count = 0;
+            uint16_t start = 0, count = 0;
         } scheme, location, path, parameters, query, fragment, media, data;
     } parts;
 

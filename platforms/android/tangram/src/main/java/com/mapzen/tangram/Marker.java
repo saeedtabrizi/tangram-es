@@ -5,6 +5,7 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
+import android.support.annotation.Keep;
 import android.util.DisplayMetrics;
 
 import com.mapzen.tangram.geometry.Polygon;
@@ -14,12 +15,14 @@ import com.mapzen.tangram.geometry.Polyline;
  * Class used to display points, polylines, and bitmaps dynamically on a map. Do not create one of
  * these objects directly, instead use {@link MapController#addMarker()}.
  */
+@Keep
 public class Marker {
 
     private Context context;
     private long markerId = 0;
     private MapController map;
     private boolean visible = true;
+    private Object userData = null;
 
     /**
      * Package private constructor for creating a new {@link Marker}.
@@ -34,6 +37,22 @@ public class Marker {
     }
 
     /**
+     * Custom user data storage.
+     * @param userData The user data to hold in this marker.
+     */
+    public void setUserData(Object userData) {
+        this.userData = userData;
+    }
+
+    /**
+     * Gets custom user data.
+     * @return The user data held by this marker.
+     */
+    public Object getUserData() {
+        return this.userData;
+    }
+
+    /**
      * Returns the {@link Marker} id
      * @return marker id
      */
@@ -42,6 +61,24 @@ public class Marker {
     }
 
     /**
+     * Used to style the marker
+     * Sets draw rules from a draw group of a scene layer in the scene file, used to load the scene.
+     * This draw group must be defined in the loaded scene file.
+     *
+     * <ul>
+     * <li>layers.layer_a.layer_b.draw.some_draw_rule</li>
+     * <li>layers.layer_c.draw.another_draw_rule</li>
+     * </ul>
+     *
+     * @param path Absolute path to a draw rule in the current scene, delimited with "."
+     * @return whether the styling was successfully set on the marker.
+     */
+    public boolean setStylingFromPath(String path) {
+        return map.setMarkerStylingFromPath(markerId, path);
+    }
+
+    /**
+     * Used to style the marker
      * Sets the styling to be used to display either a point, polyline, or bitmap for this marker.
      * If the marker is going to be used to display a bitmap, a 'points' style must be set.
      *
@@ -54,8 +91,8 @@ public class Marker {
      * @param styleStr the style string
      * @return whether the style was successfully set
      */
-    public boolean setStyling(String styleStr) {
-        return map.setMarkerStyling(markerId, styleStr);
+    public boolean setStylingFromString(String styleString) {
+        return map.setMarkerStylingFromString(markerId, styleString);
     }
 
     /**
@@ -191,5 +228,9 @@ public class Marker {
         }
 
         return map.setMarkerBitmap(markerId, width, height, abgr);
+    }
+
+    void invalidate() {
+        this.markerId = 0;
     }
 }

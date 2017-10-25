@@ -326,6 +326,9 @@ void Url::parse() {
     size_t start = 0;
     size_t end = buffer.size();
 
+    // Ensure that the buffer is not too large to describe in 16-bit part indicies.
+    assert(end == (uint16_t)end);
+
     // Parse the fragment.
     {
         // If there's a '#' in the string, the substring after it to the end is the fragment.
@@ -432,7 +435,6 @@ void Url::parse() {
     // Parse the path. After the preceding steps, the remaining string is the URL path.
     parts.path.start = start;
     parts.path.count = end - start;
-
 }
 
 size_t Url::removeLastSegmentFromRange(std::string& string, size_t start, size_t end) {
@@ -499,6 +501,102 @@ size_t Url::removeDotSegmentsFromRange(std::string& str, size_t start, size_t co
     }
 
     return out - start;
+}
+
+std::string Url::getPathExtension(const std::string& path) {
+    std::string ext;
+
+    // Isolate the last segment of the path.
+    auto lastPathSegment = path.rfind('/');
+    if (lastPathSegment == std::string::npos) {
+        // If path has no delimiters, the whole path is the last segment.
+        lastPathSegment = 0;
+    }
+
+    // Find the last extension delimiter in the last segment.
+    auto lastDotPos = path.rfind('.');
+    if (lastDotPos != std::string::npos && lastDotPos > lastPathSegment + 1) {
+        // If an extension delimiter is found within the last segment, but not
+        // at its start, then the extension is the string between this delimiter
+        // and the end of the path.
+        ext = path.substr(lastDotPos + 1);
+    }
+
+    return ext;
+}
+
+bool Url::isReservedCharacter(unsigned char in) {
+    switch (in) {
+    case '0': case '1': case '2': case '3': case '4':
+    case '5': case '6': case '7': case '8': case '9':
+    case 'a': case 'b': case 'c': case 'd': case 'e':
+    case 'f': case 'g': case 'h': case 'i': case 'j':
+    case 'k': case 'l': case 'm': case 'n': case 'o':
+    case 'p': case 'q': case 'r': case 's': case 't':
+    case 'u': case 'v': case 'w': case 'x': case 'y': case 'z':
+    case 'A': case 'B': case 'C': case 'D': case 'E':
+    case 'F': case 'G': case 'H': case 'I': case 'J':
+    case 'K': case 'L': case 'M': case 'N': case 'O':
+    case 'P': case 'Q': case 'R': case 'S': case 'T':
+    case 'U': case 'V': case 'W': case 'X': case 'Y': case 'Z':
+    case '-': case '.': case '_': case '~':
+        return false;
+    default:
+        return true;
+    }
+}
+
+char encodeHexDigit(int d) {
+    return "0123456789ABCDEF"[d & 0x0F];
+}
+
+int decodeHexDigit(char c) {
+    if (c >= '0' && c <= '9') { return c - '0'; }
+    if (c >= 'a' && c <= 'f') { return c - 'a' + 10; }
+    if (c >= 'A' && c <= 'F') { return c - 'A' + 10; }
+    return -1;
+}
+
+std::string Url::escapeReservedCharacters(const std::string& in) {
+    std::string out;
+    // The output string will be at least as long as the input, possibly longer.
+    out.reserve(in.size());
+    for (auto it = in.begin(), end = in.end(); it != end; ++it) {
+        if (isReservedCharacter(*it)) {
+            // Escape the character with %-encoding.
+            out += '%';
+            out += encodeHexDigit(*it >> 4);
+            out += encodeHexDigit(*it);
+        } else {
+            // Copy the character as-is.
+            out += *it;
+        }
+    }
+    return out;
+}
+
+std::string Url::unEscapeReservedCharacters(const std::string& in) {
+    std::string out;
+    // The output string will be up to the length of the input.
+    out.reserve(in.size());
+    for (auto it = in.begin(), end = in.end(); it != end; ++it) {
+        if (*it == '%' && it + 2 < end) {
+            // This could be a %-encoded reserved character, check whether
+            // two hex digits follow.
+            int d0 = decodeHexDigit(*(it + 1));
+            int d1 = decodeHexDigit(*(it + 2));
+            if (d0 != -1 && d1 != -1) {
+                // Found a byte value, decode it into the string.
+                out += ((d0 << 4) + d1);
+                // Skip over the two hex digits.
+                it += 2;
+                continue;
+            }
+        }
+        // Copy the character as-is.
+        out += *it;
+    }
+    return out;
 }
 
 } // namespace Tangram

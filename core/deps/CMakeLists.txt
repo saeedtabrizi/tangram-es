@@ -21,29 +21,6 @@ target_include_directories(css-color-parser-cpp
   PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/css-color-parser-cpp)
 
-
-## geojsonvt ##
-###############
-file(GLOB_RECURSE GEOJSON_VT_CPP_SOURCES "geojson-vt-cpp/src/*.cpp")
-add_library(geojson-vt-cpp ${GEOJSON_VT_CPP_SOURCES})
-target_include_directories(geojson-vt-cpp
-  PUBLIC
-  ${CMAKE_CURRENT_SOURCE_DIR}/geojson-vt-cpp/include
-  # use our variant and geojsonvt_types.hpp
-  # instead of the provided ones
-  PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}
-  ${CMAKE_CURRENT_SOURCE_DIR}/mapbox
-  ${CMAKE_CURRENT_SOURCE_DIR}/../include/tangram)
-
-set_target_properties(geojson-vt-cpp
-  PROPERTIES COMPILE_FLAGS -DGEOJSONVT_CUSTOM_TAGS)
-
-target_compile_options(geojson-vt-cpp
-  PUBLIC
-  -Wno-unknown-pragmas)
-
-
 ## duktape ##
 #############
 add_library(duktape
@@ -59,8 +36,18 @@ target_include_directories(duktape
   PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/duktape)
 
+## miniz ##
+###########
+add_library(miniz
+    ${CMAKE_CURRENT_SOURCE_DIR}/miniz/miniz.c)
 
-if(NOT USE_SYSTEM_FONT_LIBS)
+target_include_directories(miniz
+  PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}/miniz)
+
+
+
+if(NOT TANGRAM_USE_SYSTEM_FONT_LIBS)
   ## Harfbuzz - ICU-Common - UCDN - Freetype2 ##
   ##############################################
   set(HARFBUZZ_BUILD_ICU ON CACHE BOOL "Enable building of ICU")
@@ -90,3 +77,15 @@ add_subdirectory(SQLiteCpp)
 
 # Extensions aren't needed for MBTiles and aren't available in older versions of sqlite3.
 target_compile_definitions(SQLiteCpp PRIVATE SQLITE_OMIT_LOAD_EXTENSION)
+
+# needed for sqlite3 to work for ndk15c+ and android api level < 21
+# refer:
+# https://github.com/android-ndk/ndk/issues/477 and
+# https://android.googlesource.com/platform/bionic/+/master/docs/32-bit-abi.md
+if (ANDROID)
+    target_compile_definitions(sqlite3 PRIVATE _FILE_OFFSET_BITS=32)
+endif()
+
+## double-conversion ##
+#######################
+add_subdirectory(double-conversion)

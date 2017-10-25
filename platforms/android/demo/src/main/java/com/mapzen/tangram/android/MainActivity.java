@@ -1,13 +1,15 @@
 package com.mapzen.tangram.android;
 
-import android.app.Activity;
 import android.graphics.PointF;
 import android.os.Bundle;
+import android.support.v7.app.AppCompatActivity;
 import android.util.Log;
 import android.view.Window;
 import android.widget.Toast;
 
+import com.mapzen.tangram.CachePolicy;
 import com.mapzen.tangram.HttpHandler;
+import com.mapzen.tangram.LabelPickResult;
 import com.mapzen.tangram.LngLat;
 import com.mapzen.tangram.MapController;
 import com.mapzen.tangram.MapController.FeaturePickListener;
@@ -15,31 +17,53 @@ import com.mapzen.tangram.MapController.LabelPickListener;
 import com.mapzen.tangram.MapController.MarkerPickListener;
 import com.mapzen.tangram.MapController.ViewCompleteListener;
 import com.mapzen.tangram.MapData;
-import com.mapzen.tangram.Marker;
 import com.mapzen.tangram.MapView;
-import com.mapzen.tangram.MapView.OnMapReadyCallback;
 import com.mapzen.tangram.Marker;
 import com.mapzen.tangram.MarkerPickResult;
+import com.mapzen.tangram.SceneError;
+import com.mapzen.tangram.SceneUpdate;
 import com.mapzen.tangram.TouchInput.DoubleTapResponder;
 import com.mapzen.tangram.TouchInput.LongPressResponder;
 import com.mapzen.tangram.TouchInput.TapResponder;
-import com.mapzen.tangram.LabelPickResult;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
-public class MainActivity extends Activity implements OnMapReadyCallback, TapResponder,
+import okhttp3.CacheControl;
+import okhttp3.HttpUrl;
+
+public class MainActivity extends AppCompatActivity implements MapController.SceneLoadListener, TapResponder,
         DoubleTapResponder, LongPressResponder, FeaturePickListener, LabelPickListener, MarkerPickListener {
+
+    private static final String MAPZEN_API_KEY = BuildConfig.MAPZEN_API_KEY;
+
+    private static final String TAG = "TangramDemo";
+
+    private static final String[] SCENE_PRESETS = {
+            "asset:///scene.yaml",
+            "https://mapzen.com/carto/bubble-wrap-style-more-labels/bubble-wrap-style-more-labels.zip",
+            "https://mapzen.com/carto/refill-style-more-labels/refill-style-more-labels.zip",
+            "https://mapzen.com/carto/walkabout-style-more-labels/walkabout-style-more-labels.zip",
+            "https://mapzen.com/carto/tron-style-more-labels/tron-style-more-labels.zip",
+            "https://mapzen.com/carto/cinnabar-style-more-labels/cinnabar-style-more-labels.zip",
+            "https://mapzen.com/carto/zinc-style-more-labels/zinc-style-more-labels.zip"
+    };
+
+    private ArrayList<SceneUpdate> sceneUpdates = new ArrayList<>();
 
     MapController map;
     MapView view;
     LngLat lastTappedPoint;
     MapData markers;
 
-    String pointStyle = "{ style: 'points', interactive: true, color: 'white', size: [50px, 50px], order: 2000, collide: false }";
+    PresetSelectionTextView sceneSelector;
+
+    String pointStylingPath = "layers.touch.point.draw.icons";
     ArrayList<Marker> pointMarkers = new ArrayList<Marker>();
 
     boolean showTileInfo = false;
@@ -52,9 +76,58 @@ public class MainActivity extends Activity implements OnMapReadyCallback, TapRes
 
         setContentView(R.layout.main);
 
+        if (MAPZEN_API_KEY.isEmpty() || MAPZEN_API_KEY.equals("null")) {
+            Log.w(TAG, "No API key found! Mapzen data sources require an API key.\n" +
+                    "Sign up for a free key at http://mapzen.com/developers and set it\n" +
+                    "in your local Gradle properties file (~/.gradle/gradle.properties)\n" +
+                    "as 'mapzenApiKey=YOUR-API-KEY-HERE'");
+        }
+
+        // Create a scene update to apply our API key in the scene.
+        sceneUpdates.add(new SceneUpdate("global.sdk_mapzen_api_key", MAPZEN_API_KEY));
+
+        // Set up a text view to allow selecting preset and custom scene URLs.
+        sceneSelector = (PresetSelectionTextView)findViewById(R.id.sceneSelector);
+        sceneSelector.setText(SCENE_PRESETS[0]);
+        sceneSelector.setPresetStrings(Arrays.asList(SCENE_PRESETS));
+        sceneSelector.setOnSelectionListener(new PresetSelectionTextView.OnSelectionListener() {
+            @Override
+            public void onSelection(String selection) {
+                map.loadSceneFile(selection, sceneUpdates);
+            }
+        });
+
+        // Grab a reference to our map view.
         view = (MapView)findViewById(R.id.map);
-        view.onCreate(savedInstanceState);
-        view.getMapAsync(this, "scene.yaml");
+    }
+
+    @Override
+    public void onPostCreate(Bundle savedInstanceState) {
+        super.onPostCreate(savedInstanceState);
+        // The AutoCompleteTextView preserves its contents from previous instances, so if a URL was
+        // set previously we want to apply it again. The text is restored in onRestoreInstanceState,
+        // which occurs after onCreate and onStart, but before onPostCreate, so we get the URL here.
+        String sceneUrl = sceneSelector.getCurrentString();
+
+        map = view.getMap(this);
+        map.loadSceneFile(sceneUrl, sceneUpdates);
+
+        map.setZoom(16);
+        map.setPosition(new LngLat(-74.00976419448854, 40.70532700869127));
+        map.setHttpHandler(getHttpHandler());
+        map.setTapResponder(this);
+        map.setDoubleTapResponder(this);
+        map.setLongPressResponder(this);
+        map.setFeaturePickListener(this);
+        map.setLabelPickListener(this);
+        map.setMarkerPickListener(this);
+
+        map.setViewCompleteListener(new ViewCompleteListener() {
+            public void onViewComplete() {
+                Log.d(TAG, "View complete");
+            }});
+
+        markers = map.addDataLayer("touch");
     }
 
     @Override
@@ -81,34 +154,38 @@ public class MainActivity extends Activity implements OnMapReadyCallback, TapRes
         view.onLowMemory();
     }
 
-    @Override
-    public void onMapReady(MapController mapController) {
-        map = mapController;
-        map.setZoom(16);
-        map.setPosition(new LngLat(-74.00976419448854, 40.70532700869127));
-        map.setHttpHandler(getHttpHandler());
-        map.setTapResponder(this);
-        map.setDoubleTapResponder(this);
-        map.setLongPressResponder(this);
-        map.setFeaturePickListener(this);
-        map.setLabelPickListener(this);
-        map.setMarkerPickListener(this);
 
-        map.setViewCompleteListener(new ViewCompleteListener() {
-                public void onViewComplete() {
-                    runOnUiThread(new Runnable() {
-                            public void run() {
-                                Log.d("Tangram", "View complete");
-                            }
-                        });
-                }});
-        markers = map.addDataLayer("touch");
+    @Override
+    public void onSceneReady(int sceneId, SceneError sceneError) {
+
+        Log.d(TAG, "onSceneReady!");
+        if (sceneError == null) {
+            Toast.makeText(this, "Scene ready: " + sceneId, Toast.LENGTH_SHORT).show();
+        } else {
+            Toast.makeText(this, "Scene load error: " + sceneId + " "
+                    + sceneError.getSceneUpdate().toString()
+                    + " " + sceneError.getError().toString(), Toast.LENGTH_SHORT).show();
+
+            Log.d(TAG, "Scene update errors "
+                    + sceneError.getSceneUpdate().toString()
+                    + " " + sceneError.getError().toString());
+        }
     }
 
     HttpHandler getHttpHandler() {
         File cacheDir = getExternalCacheDir();
         if (cacheDir != null && cacheDir.exists()) {
-            return new HttpHandler(new File(cacheDir, "tile_cache"), 30 * 1024 * 1024);
+            CachePolicy cachePolicy = new CachePolicy() {
+                CacheControl tileCacheControl = new CacheControl.Builder().maxStale(7, TimeUnit.DAYS).build();
+                @Override
+                public CacheControl apply(HttpUrl url) {
+                    if (url.host().equals("tile.mapzen.com")) {
+                        return tileCacheControl;
+                    }
+                    return null;
+                }
+            };
+            return new HttpHandler(new File(cacheDir, "tile_cache"), 30 * 1024 * 1024, cachePolicy);
         }
         return new HttpHandler();
     }
@@ -133,7 +210,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback, TapRes
             markers.addPolyline(line, props);
 
             Marker p = map.addMarker();
-            p.setStyling(pointStyle);
+            p.setStylingFromPath(pointStylingPath);
             p.setPoint(tappedPoint);
             pointMarkers.add(p);
         }
@@ -173,7 +250,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback, TapRes
     @Override
     public void onFeaturePick(Map<String, String> properties, float positionX, float positionY) {
         if (properties.isEmpty()) {
-            Log.d("Tangram", "Empty selection");
+            Log.d(TAG, "Empty selection");
             return;
         }
 
@@ -182,23 +259,15 @@ public class MainActivity extends Activity implements OnMapReadyCallback, TapRes
             name = "unnamed";
         }
 
-        Log.d("Tangram", "Picked: " + name);
+        Log.d(TAG, "Picked: " + name);
         final String message = name;
-        runOnUiThread(new Runnable() {
-                          @Override
-                          public void run() {
-                              Toast.makeText(getApplicationContext(),
-                                      "Selected: " + message,
-                                      Toast.LENGTH_SHORT).show();
-                          }
-                      });
-
+        Toast.makeText(getApplicationContext(), "Selected: " + message, Toast.LENGTH_SHORT).show();
     }
 
     @Override
     public void onLabelPick(LabelPickResult labelPickResult, float positionX, float positionY) {
         if (labelPickResult == null) {
-            Log.d("Tangram", "Empty label selection");
+            Log.d(TAG, "Empty label selection");
             return;
         }
 
@@ -207,35 +276,21 @@ public class MainActivity extends Activity implements OnMapReadyCallback, TapRes
             name = "unnamed";
         }
 
-        Log.d("Tangram", "Picked label: " + name);
+        Log.d(TAG, "Picked label: " + name);
         final String message = name;
-        runOnUiThread(new Runnable() {
-                          @Override
-                          public void run() {
-                              Toast.makeText(getApplicationContext(),
-                                      "Selected label: " + message,
-                                      Toast.LENGTH_SHORT).show();
-                          }
-                      });
+        Toast.makeText(getApplicationContext(), "Selected label: " + message, Toast.LENGTH_SHORT).show();
     }
 
     @Override
     public void onMarkerPick(MarkerPickResult markerPickResult, float positionX, float positionY) {
         if (markerPickResult == null) {
-            Log.d("Tangram", "Empty marker selection");
+            Log.d(TAG, "Empty marker selection");
             return;
         }
 
-        Log.d("Tangram", "Picked marker: " + markerPickResult.getMarker().getMarkerId());
+        Log.d(TAG, "Picked marker: " + markerPickResult.getMarker().getMarkerId());
         final String message = String.valueOf(markerPickResult.getMarker().getMarkerId());
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                Toast.makeText(getApplicationContext(),
-                        "Selected Marker: " + message,
-                        Toast.LENGTH_SHORT).show();
-            }
-        });
+        Toast.makeText(getApplicationContext(), "Selected Marker: " + message, Toast.LENGTH_SHORT).show();
     }
 }
 

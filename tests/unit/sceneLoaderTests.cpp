@@ -1,22 +1,22 @@
 #include "catch.hpp"
 
-#include "yaml-cpp/yaml.h"
-#include "scene/sceneLoader.h"
+#include "mockPlatform.h"
+#include "scene/pointLight.h"
 #include "scene/scene.h"
+#include "scene/sceneLoader.h"
 #include "style/material.h"
-#include "style/style.h"
 #include "style/polylineStyle.h"
 #include "style/polygonStyle.h"
-#include "scene/pointLight.h"
+#include "style/style.h"
 
-#include "platform_mock.h"
+#include "yaml-cpp/yaml.h"
 
 using namespace Tangram;
 using YAML::Node;
 
 TEST_CASE("Style with the same name as a built-in style are ignored") {
     std::shared_ptr<Platform> platform = std::make_shared<MockPlatform>();
-    std::shared_ptr<Scene> scene = std::make_shared<Scene>(platform);
+    std::shared_ptr<Scene> scene = std::make_shared<Scene>(platform, Url());
     SceneLoader::loadStyle(platform, "polygons", Node(), scene);
     REQUIRE(scene->styles().size() == 0);
 
@@ -24,7 +24,7 @@ TEST_CASE("Style with the same name as a built-in style are ignored") {
 
 TEST_CASE("Correctly instantiate a style from a YAML configuration") {
     std::shared_ptr<Platform> platform = std::make_shared<MockPlatform>();
-    std::shared_ptr<Scene> scene = std::make_shared<Scene>(platform);
+    std::shared_ptr<Scene> scene = std::make_shared<Scene>(platform, Url());
 
     scene->styles().emplace_back(new PolygonStyle("polygons"));
     scene->styles().emplace_back(new PolylineStyle("lines"));

@@ -9,7 +9,6 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.ArrayList;
-import java.util.Vector;
 
 import org.xmlpull.v1.XmlPullParser;
 import org.xmlpull.v1.XmlPullParserException;
@@ -19,15 +18,31 @@ import android.util.Xml;
 class FontFileParser {
 
     private Map<String, String> fontDict = new HashMap<String, String>();
-    private Map<Integer, Vector<String>> fallbackFontDict = new HashMap<Integer, Vector<String>>();
+    private Map<Integer, ArrayList<String>> fallbackFontDict = new HashMap<Integer, ArrayList<String>>();
 
     private static String systemFontPath = "/system/fonts/";
     // Android version >= 5.0
     private static String fontXMLPath = "/system/etc/fonts.xml";
-    // Android version < 5.0
-    private static String fontXMLFallbackPath = "/etc/system_fonts.xml";
 
-    private void processDocumentFallback(XmlPullParser parser) throws XmlPullParserException, IOException {
+    // Android version < 5.0
+    private static String oldFontXMLPath = "/system/etc/system_fonts.xml";
+    private static String oldFontXMLFallbackPath = "/system/etc/fallback_fonts.xml";
+
+    private void addFallback(Integer weight, String filename) {
+        String fullFileName = systemFontPath + filename;
+        if (!new File(fullFileName).exists()) {
+            return;
+        }
+
+        if (!fallbackFontDict.containsKey(weight)) {
+            fallbackFontDict.put(weight, new ArrayList<String>());
+        }
+
+        fallbackFontDict.get(weight).add(fullFileName);
+    }
+
+
+    private void processDocumentPreLollipop(XmlPullParser parser) throws XmlPullParserException, IOException {
         parser.nextTag();
         parser.require(XmlPullParser.START_TAG, null, "familyset");
 
@@ -39,69 +54,83 @@ class FontFileParser {
                 continue;
             }
 
-            if ("family".equals(parser.getName())) {
-                namesets.clear();
-                filesets.clear();
+            if (!"family".equals(parser.getName())) {
+                skip(parser);
+                continue;
+            }
 
-                while (parser.next() != XmlPullParser.END_TAG) {
-                    if (parser.getEventType() != XmlPullParser.START_TAG) {
-                        continue;
-                    }
+            namesets.clear();
+            filesets.clear();
 
-                    if ("nameset".equals(parser.getName())) {
-                        while (parser.next() != XmlPullParser.END_TAG) {
-                            if (parser.getEventType() != XmlPullParser.START_TAG) {
-                                continue;
-                            }
+            while (parser.next() != XmlPullParser.END_TAG) {
+                if (parser.getEventType() != XmlPullParser.START_TAG) {
+                    continue;
+                }
 
-                            String name = parser.nextText();
-                            namesets.add(name.toLowerCase());
+                if ("nameset".equals(parser.getName())) {
+                    while (parser.next() != XmlPullParser.END_TAG) {
+                        if (parser.getEventType() != XmlPullParser.START_TAG) {
+                            continue;
                         }
-                        continue;
+
+                        String name = parser.nextText();
+                        namesets.add(name.toLowerCase());
                     }
+                    continue;
+                }
 
-                    if ("fileset".equals(parser.getName())) {
-                        while (parser.next() != XmlPullParser.END_TAG) {
-                            if (parser.getEventType() != XmlPullParser.START_TAG) {
-                                continue;
-                            }
-
-                            String file = parser.nextText();
-                            filesets.add(file);
+                if ("fileset".equals(parser.getName())) {
+                    while (parser.next() != XmlPullParser.END_TAG) {
+                        if (parser.getEventType() != XmlPullParser.START_TAG) {
+                            continue;
                         }
-                    } else {
-                       skip(parser);
+                        String filename = parser.nextText();
+                        // Don't use UI fonts
+                        if (filename.contains("UI-")) {
+                            continue;
+                        }
+                        // Sorry - not yet supported
+                        if (filename.contains("Emoji")) {
+                            continue;
+                        }
+                        filesets.add(filename);
                     }
+                } else {
+                    skip(parser);
+                }
 
-                    for (String file : filesets) {
-                        for (String name : namesets) {
-                            String fullFilename = systemFontPath + file;
-                            String style = "normal";
+                // fallback_fonts.xml entries have no names
+                if (namesets.isEmpty()) { namesets.add("sans-serif"); }
 
-                            // The file structure in `/etc/system_fonts.xml` is quite undescriptive
-                            // which makes it hard to make a matching from a font style to a font file
-                            // e.g. italic -> font file, instead we extract this information from the
-                            // font file name itself
-                            String[] fileSplit = file.split("-");
-                            if (fileSplit.length > 1) {
-                                style = fileSplit[fileSplit.length - 1].toLowerCase();
-                                // Remove extension .ttf
-                                style = style.substring(0, style.lastIndexOf('.'));
+                for (String filename : filesets) {
+                    for (String fontname : namesets) {
 
-                                if (style.equals("regular")) {
-                                    style = "normal";
-                                }
+                        String style = "normal";
+                        // The file structure in `/etc/system_fonts.xml` is quite undescriptive
+                        // which makes it hard to make a matching from a font style to a font file
+                        // e.g. italic -> font file, instead we extract this information from the
+                        // font file name itself
+                        String[] fileSplit = filename.split("-");
+                        if (fileSplit.length > 1) {
+                            style = fileSplit[fileSplit.length - 1].toLowerCase();
+                            // Remove extension .ttf
+                            style = style.substring(0, style.lastIndexOf('.'));
+
+                            if (style.equals("regular")) {
+                                style = "normal";
                             }
+                        }
 
-                            // Same here, font boldness is non-available for android < 5.0 file
-                            // description, we default to integer boldness of 400 by default
-                            String key = name + "_400_" + style;
-                            fontDict.put(key, fullFilename);
+                        // Same here, font boldness is non-available for android < 5.0 file
+                        // description, we default to integer boldness of 400 by default
+                        String key = fontname + "_400_" + style;
+                        fontDict.put(key, systemFontPath + filename);
+
+                        if ("sans-serif".equals(fontname) && "normal".equals(style)) {
+                            addFallback(400, filename);
                         }
                     }
                 }
-            } else {
-                skip(parser);
             }
         }
     }
@@ -121,6 +150,7 @@ class FontFileParser {
                 familyWeights.clear();
                 // Parse this family:
                 String name = parser.getAttributeValue(null, "name");
+                String lang = parser.getAttributeValue(null, "lang");
 
                 // fallback fonts
                 if (name == null) {
@@ -136,45 +166,50 @@ class FontFileParser {
 
                             String filename = parser.nextText();
 
-                            Integer weight = new Integer(weightStr);
-                            if (!fallbackFontDict.containsKey(weight)) {
-                                fallbackFontDict.put(weight, new Vector<String>());
-                            }
-
                             // Don't use UI fonts
-                            if (filename.indexOf("UI-") >= 0) {
+                            if (filename.contains("UI-")) {
+                                continue;
+                            }
+                            // Sorry - not yet supported
+                            if (filename.contains("Emoji")) {
                                 continue;
                             }
 
-                            String fullFileName = systemFontPath + filename;
-
-                            fallbackFontDict.get(weight).add(fullFileName);
+                            addFallback(Integer.valueOf(weightStr), filename);
                         } else {
                             skip(parser);
                         }
                     }
-                    continue;
-                }
-                while (parser.next() != XmlPullParser.END_TAG) {
-                    if (parser.getEventType() != XmlPullParser.START_TAG) {
-                        continue;
-                    }
-                    String tag = parser.getName();
-                    if ("font".equals(tag)) {
-                        String weightStr = parser.getAttributeValue(null, "weight");
-                        if (weightStr != null) { familyWeights.add(weightStr); }
-                        weightStr = (weightStr == null) ? "400" : weightStr;
 
-                        String styleStr = parser.getAttributeValue(null, "style");
-                        styleStr = (styleStr == null) ? "normal" : styleStr;
+                } else {
+                    while (parser.next() != XmlPullParser.END_TAG) {
+                        if (parser.getEventType() != XmlPullParser.START_TAG) {
+                            continue;
+                        }
+                        String tag = parser.getName();
+                        if ("font".equals(tag)) {
+                            String weightStr = parser.getAttributeValue(null, "weight");
+                            if (weightStr != null) {
+                                familyWeights.add(weightStr);
+                            }
+                            weightStr = (weightStr == null) ? "400" : weightStr;
 
-                        String filename = parser.nextText();
-                        String fullFileName = systemFontPath + filename;
+                            String styleStr = parser.getAttributeValue(null, "style");
+                            styleStr = (styleStr == null) ? "normal" : styleStr;
 
-                        String key = name + "_" + weightStr + "_" + styleStr;
-                        fontDict.put(key, fullFileName);
-                    } else {
-                        skip(parser);
+                            String filename = parser.nextText();
+                            String fullFileName = systemFontPath + filename;
+
+                            String key = name + "_" + weightStr + "_" + styleStr;
+                            fontDict.put(key, fullFileName);
+
+                            if ("sans-serif".equals(name) && "normal".equals(styleStr)) {
+                                addFallback(Integer.valueOf(weightStr), filename);
+                            }
+
+                        } else {
+                            skip(parser);
+                        }
                     }
                 }
             } else if ("alias".equals(parser.getName())) {
@@ -221,25 +256,27 @@ class FontFileParser {
     }
 
     public void parse() {
-        InputStream in = null;
-        boolean fallbackXML = false;
-        final File fontFile = new File(fontXMLPath);
 
-        String fileXml = "";
+        File fontFile = new File(fontXMLPath);
 
         if (fontFile.exists()) {
-            fileXml = fontFile.getAbsolutePath();
-        } else {
-            File fontFileFallback = new File(fontXMLFallbackPath);
-            if (fontFileFallback.exists()) {
-                fileXml = fontFileFallback.getAbsolutePath();
-            }
-            fallbackXML = true;
-        }
-
-        if("".equals(fileXml)) {
+            parse(fontFile.getAbsolutePath(), false);
             return;
         }
+
+        fontFile = new File(oldFontXMLPath);
+        if (fontFile.exists()) {
+            parse(fontFile.getAbsolutePath(), true);
+        }
+        fontFile = new File(oldFontXMLFallbackPath);
+        if (fontFile.exists()) {
+            parse(fontFile.getAbsolutePath(), true);
+        }
+    }
+
+    private void parse(String fileXml, boolean oldXML) {
+
+        InputStream in;
 
         try {
             in = new FileInputStream(fileXml);
@@ -253,8 +290,8 @@ class FontFileParser {
         try {
             parser.setInput(in, null);
 
-            if (fallbackXML) {
-                processDocumentFallback(parser);
+            if (oldXML) {
+                processDocumentPreLollipop(parser);
             } else {
                 processDocument(parser);
             }
@@ -271,7 +308,7 @@ class FontFileParser {
         }
     }
 
-    public String getFontFile( String _key ) {
+    public String getFontFile(String _key) {
         if (fontDict.containsKey(_key)) {
             return fontDict.get(_key);
         } else {
@@ -291,19 +328,18 @@ class FontFileParser {
         String fallback = "";
 
         while (it.hasNext()) {
-            Map.Entry pair = (Map.Entry)it.next();
-            Integer diff = Math.abs((Integer) pair.getKey() - weightHint);
+            Map.Entry<Integer, ArrayList<String>> pair = (Map.Entry)it.next();
+            Integer diff = Math.abs(pair.getKey() - weightHint);
 
             if (diff < diffWeight) {
-                Vector<String> fallbacks = (Vector<String>) pair.getValue();
+                ArrayList<String> fallbacks = pair.getValue();
 
                 if (importance < fallbacks.size()) {
-                    fallback = fallbacks.elementAt(importance);
+                    fallback = fallbacks.get(importance);
                     diffWeight = diff;
                 }
             }
         }
-
         return fallback;
     }
 

@@ -1,15 +1,16 @@
 #include "catch.hpp"
 
-#include <iostream>
-#include <vector>
+#include "data/tileData.h"
+#include "mockPlatform.h"
+#include "scene/filters.h"
+#include "scene/scene.h"
+#include "scene/sceneLoader.h"
+#include "scene/styleContext.h"
 
 #include "yaml-cpp/yaml.h"
-#include "scene/filters.h"
-#include "data/tileData.h"
-#include "scene/sceneLoader.h"
-#include "scene/scene.h"
-#include "scene/styleContext.h"
-#include "platform_mock.h"
+
+#include <iostream>
+#include <vector>
 
 using namespace Tangram;
 using YAML::Node;
@@ -21,8 +22,7 @@ Context ctx;
 Feature civic, bmw1, bike;
 
 Filter load(const std::string& filterYaml) {
-    std::shared_ptr<Platform> platform = std::make_shared<MockPlatform>();
-    Scene scene(platform);
+    Scene scene(std::make_shared<MockPlatform>(), Url());
     YAML::Node node = YAML::Load(filterYaml);
     auto filter = SceneLoader::generateFilter(node["filter"], scene);
     ctx.initFunctions(scene);

@@ -1,12 +1,12 @@
 #include "gl/texture.h"
 
-#include "gl/error.h"
+#include "gl/glError.h"
 #include "gl/renderState.h"
 #include "gl/hardware.h"
-#include "util/geom.h"
 #include "log.h"
+#include "map.h"
 #include "platform.h"
-#include "tangram.h"
+#include "util/geom.h"
 
 // Enable only JPEG, PNG, GIF, TGA and PSD
 #define STBI_NO_BMP
@@ -283,6 +283,10 @@ void Texture::resize(const unsigned int _width, const unsigned int _height) {
 
 bool Texture::isRepeatWrapping(TextureWrapping _wrapping) {
     return _wrapping.wraps == GL_REPEAT || _wrapping.wrapt == GL_REPEAT;
+}
+
+size_t Texture::bufferSize() {
+    return m_width * m_height * bytesPerPixel();
 }
 
 size_t Texture::bytesPerPixel() {

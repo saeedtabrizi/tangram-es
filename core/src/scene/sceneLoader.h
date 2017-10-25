@@ -1,20 +1,15 @@
 #pragma once
 
 #include "gl/uniform.h"
+#include "map.h"
 #include "scene/scene.h"
-#include "tangram.h"
 
 #include <memory>
-#include <mutex>
-#include <sstream>
 #include <string>
 #include <tuple>
 #include <vector>
 
 #include "yaml-cpp/yaml.h"
-#include "glm/vec2.hpp"
-#include "glm/vec3.hpp"
-#include "glm/vec4.hpp"
 
 namespace Tangram {
 
@@ -41,9 +36,12 @@ struct StyleUniform {
 struct SceneLoader {
     using Node = YAML::Node;
 
-    static bool loadScene(const std::shared_ptr<Platform>& _platform, std::shared_ptr<Scene> _scene, const std::vector<SceneUpdate>& updates = {});
+    static bool loadScene(const std::shared_ptr<Platform>& _platform, std::shared_ptr<Scene> _scene,
+                          const std::vector<SceneUpdate>& updates = {});
+
     static bool applyConfig(const std::shared_ptr<Platform>& platform, const std::shared_ptr<Scene>& scene);
-    static void applyUpdates(Scene& scene, const std::vector<SceneUpdate>& updates);
+    static bool applyUpdates(const std::shared_ptr<Platform>& platform, Scene& scene,
+                             const std::vector<SceneUpdate>& updates);
     static void applyGlobals(Node root, Scene& scene);
 
     /*** all public for testing ***/
@@ -62,7 +60,7 @@ struct SceneLoader {
     static void loadMaterial(const std::shared_ptr<Platform>& platform, Node matNode, Material& material, const std::shared_ptr<Scene>& scene, Style& style);
     static void loadShaderConfig(const std::shared_ptr<Platform>& platform, Node shaders, Style& style, const std::shared_ptr<Scene>& scene);
     static void loadFont(const std::shared_ptr<Platform>& platform, const std::pair<Node, Node>& font, const std::shared_ptr<Scene>& scene);
-    static SceneLayer loadSublayer(Node layer, const std::string& name, const std::shared_ptr<Scene>& scene);
+    static SceneLayer loadSublayer(const Node& layer, const std::string& name, const std::shared_ptr<Scene>& scene);
     static Filter generateFilter(Node filter, Scene& scene);
     static Filter generateAnyFilter(Node filter, Scene& scene);
     static Filter generateAllFilter(Node filter, Scene& scene);
@@ -74,14 +72,6 @@ struct SceneLoader {
     static std::shared_ptr<Texture> fetchTexture(const std::shared_ptr<Platform>& platform, const std::string& name, const std::string& url,
             const TextureOptions& options, bool generateMipmaps, const std::shared_ptr<Scene>& scene);
     static bool extractTexFiltering(Node& filtering, TextureFiltering& filter);
-
-    /*
-     * Sprite nodes are created using a default 1x1 black texture when sprite atlas is requested over the network.
-     * Once a sprite atlas has been fetched, sprite nodes need to be updated according to the width/height of the
-     * fetched sprite atlas.
-     */
-    static void updateSpriteNodes(const std::string& texName,
-            std::shared_ptr<Texture>& texture, const std::shared_ptr<Scene>& scene);
 
     static MaterialTexture loadMaterialTexture(const std::shared_ptr<Platform>& platform, Node matCompNode,
                                                const std::shared_ptr<Scene>& scene, Style& style);
@@ -98,7 +88,6 @@ struct SceneLoader {
     static bool loadStyle(const std::shared_ptr<Platform>& platform, const std::string& styleName,
                           Node config, const std::shared_ptr<Scene>& scene);
 
-    static std::mutex m_textureMutex;
     SceneLoader() = delete;
 
 };

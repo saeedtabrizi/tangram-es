@@ -46,6 +46,14 @@ DrawRule::DrawRule(const DrawRuleData& _ruleData, const std::string& _layerName,
     }
 }
 
+bool DrawRule::hasParameterSet(StyleParamKey _key) const {
+    if (auto& param = findParameter(_key)) {
+        auto key = static_cast<uint8_t>(param.key);
+        return active[key];
+    }
+    return false;
+}
+
 void DrawRule::merge(const DrawRuleData& _ruleData, const SceneLayer& _layer) {
 
     evalConflict(*this, _ruleData, _layer);
@@ -64,14 +72,6 @@ void DrawRule::merge(const DrawRuleData& _ruleData, const SceneLayer& _layer) {
             active[key] = true;
         }
     }
-}
-
-bool DrawRule::isJSFunction(StyleParamKey _key) const {
-    auto& param = findParameter(_key);
-    if (!param) {
-        return false;
-    }
-    return param.function >= 0;
 }
 
 bool DrawRule::contains(StyleParamKey _key) const {
@@ -120,7 +120,7 @@ bool DrawRuleMergeSet::match(const Feature& _feature, const SceneLayer& _layer, 
     m_queuedLayers.clear();
 
     // If uber layer is marked not visible return immediately
-    if (!_layer.visible()) {
+    if (!_layer.enabled()) {
         return false;
     }
 
@@ -142,7 +142,7 @@ bool DrawRuleMergeSet::match(const Feature& _feature, const SceneLayer& _layer, 
         // Push each of the layer's matching sublayers onto the stack
         for (const auto& sublayer : layer.sublayers()) {
             // Skip matching this sublayer if marked not visible
-            if (!sublayer.visible()) {
+            if (!sublayer.enabled()) {
                 continue;
             }
 
@@ -157,47 +157,46 @@ bool DrawRuleMergeSet::match(const Feature& _feature, const SceneLayer& _layer, 
 
 bool DrawRuleMergeSet::evaluateRuleForContext(DrawRule& rule, StyleContext& ctx) {
 
-        bool visible;
-        if (rule.get(StyleParamKey::visible, visible) && !visible) {
-            return false;
+    bool visible;
+    if (rule.get(StyleParamKey::visible, visible) && !visible) {
+        return false;
+    }
+
+    bool valid = true;
+    for (size_t i = 0; i < StyleParamKeySize; ++i) {
+
+        if (!rule.active[i]) {
+            rule.params[i].param = nullptr;
+            continue;
         }
 
-        bool valid = true;
-        for (size_t i = 0; i < StyleParamKeySize; ++i) {
+        auto*& param = rule.params[i].param;
 
-            if (!rule.active[i]) {
-                rule.params[i].param = nullptr;
-                continue;
-            }
+        // Evaluate JS functions and Stops
+        if (param->function >= 0) {
 
-            auto*& param = rule.params[i].param;
+            // Copy param into 'evaluated' and point param to the evaluated StyleParam.
+            m_evaluated[i] = *param;
+            param = &m_evaluated[i];
 
-            // Evaluate JS functions and Stops
-            if (param->function >= 0) {
-
-                // Copy param into 'evaluated' and point param to the evaluated StyleParam.
-                m_evaluated[i] = *param;
-                param = &m_evaluated[i];
-
-                if (!ctx.evalStyle(param->function, param->key, m_evaluated[i].value)) {
-                    if (StyleParam::isRequired(param->key)) {
-                        valid = false;
-                        break;
-                    } else {
-                        rule.active[i] = false;
-                    }
+            if (!ctx.evalStyle(param->function, param->key, m_evaluated[i].value)) {
+                if (StyleParam::isRequired(param->key)) {
+                    valid = false;
+                    break;
+                } else {
+                    rule.active[i] = false;
                 }
-            } else if (param->stops) {
-                m_evaluated[i] = *param;
-                param = &m_evaluated[i];
-
-                Stops::eval(*param->stops, param->key, ctx.getKeywordZoom(), m_evaluated[i].value);
             }
+        } else if (param->stops) {
+            m_evaluated[i] = *param;
+            param = &m_evaluated[i];
+
+            Stops::eval(*param->stops, param->key, ctx.getKeywordZoom(), m_evaluated[i].value);
         }
+    }
 
-        return valid;
+    return valid;
 }
-
 
 void DrawRuleMergeSet::mergeRules(const SceneLayer& _layer) {
 

@@ -1,16 +1,15 @@
 #include "catch.hpp"
-#include "tangram.h"
+#include "gl/dynamicQuadMesh.h"
+#include "labels/labels.h"
+#include "labels/textLabel.h"
+#include "labels/textLabels.h"
+#include "map.h"
 #include "platform.h"
 #include "scene/scene.h"
 #include "style/style.h"
 #include "style/textStyle.h"
-#include "labels/labels.h"
-#include "labels/textLabel.h"
-#include "labels/textLabels.h"
-#include "gl/dynamicQuadMesh.h"
-
-#include "view/view.h"
 #include "tile/tile.h"
+#include "view/view.h"
 
 #include <memory>
 
@@ -124,7 +123,7 @@ TEST_CASE( "Test anchor fallback behavior", "[Labels][AnchorFallback]" ) {
         }
 
         ScreenTransform& addLabel(Label* _l, Tile* _t) {
-            m_labels.push_back({_l, _t, false, {}});
+            m_labels.push_back({_l, nullptr, _t, nullptr, false, {}});
             tmpTransforms.emplace_back(m_transforms, m_labels.back().transformRange);
             return tmpTransforms.back().transform;
         }

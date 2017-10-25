@@ -13,64 +13,16 @@
 
 @class TGMapViewController;
 
+#import "TGMapData.h"
 #import "TGGeoPoint.h"
 #import "TGGeoPolygon.h"
 #import "TGGeoPolyline.h"
 #import "TGSceneUpdate.h"
 #import "TGHttpHandler.h"
 #import "TGLabelPickResult.h"
+#import "TGMarker.h"
 #import "TGMarkerPickResult.h"
-
-/**
- Description for a <a href="https://mapzen.com/documentation/tangram/Cameras-Overview/#camera-types">
- Tangram camera type</a>.
- */
-typedef NS_ENUM(NSInteger, TGCameraType) {
-    /// Type for a <a href="https://mapzen.com/documentation/tangram/Cameras-Overview/#perspective-camera">perspective camera</a>
-    TGCameraTypePerspective = 0,
-    /// Type for an <a href="https://mapzen.com/documentation/tangram/Cameras-Overview/#isometric-camera">isometric camera</a>
-    TGCameraTypeIsometric,
-    /// Type for a <a href="https://mapzen.com/documentation/tangram/Cameras-Overview/#flat-camera">flat camera</a>
-    TGCameraTypeFlat,
-};
-
-/**
- These enumerations describe an ease type function to be used for camera or other transition animation.
- The function is being used to interpolate between the start and end position of the animation.
- */
-typedef NS_ENUM(NSInteger, TGEaseType) {
-    /// Linear ease type `f(t) = t`
-    TGEaseTypeLinear = 0,
-    /// Cube ease type `f(t) = (-2 * t + 3) * t * t`
-    TGEaseTypeCubic,
-    /// Quint ease type `f(t) = (6 * t * t - 15 * t + 10) * t * t * t`
-    TGEaseTypeQuint,
-    /// Sine ease type `f(t) = 0.5 - 0.5 * cos(PI * t)`
-    TGEaseTypeSine,
-};
-
-/// Debug flags to render additional information about various map components
-typedef NS_ENUM(NSInteger, TGDebugFlag) {
-    /// While on, the set of tiles currently being drawn will not update to match the view
-    TGDebugFlagFreezeTiles = 0,
-    /// Apply a color change to every other zoom level to visualize proxy tile behavior
-    TGDebugFlagProxyColors,
-    /// Draw tile boundaries
-    TGDebugFlagTileBounds,
-    /// Draw tile infos (tile coordinates)
-    TGDebugFlagTileInfos,
-    /// Draw label bounding boxes and collision grid
-    TGDebugFlagLabels,
-    /// Draw tangram infos (framerate, debug log...)
-    TGDebugFlagTangramInfos,
-    /// Draw all labels (including labels being occluded)
-    TGDebugFlagDrawAllLabels,
-    /// Draw tangram frame graph stats
-    TGDebugFlagTangramStats,
-    /// Draw feature selection framebuffer
-    TGDebugFlagSelectionBuffer,
-};
-
+#import "TGTypes.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -101,6 +53,7 @@ NS_ASSUME_NONNULL_BEGIN
 /**
  Whether the map view should handle a single tap gesture.
 
+ @param view the map view attached to the recognizer
  @param recognizer the `UIGestureRecognizer` associated with the gesture
  @param location the logical pixel location of the recognized gesture
  @return Whether the map view should proceed by handling this gesture behavior
@@ -110,6 +63,7 @@ NS_ASSUME_NONNULL_BEGIN
 /**
  Whether the map view should handle a double tap gesture.
 
+ @param view the map view attached to the recognizer
  @param recognizer the `UIGestureRecognizer` associated with the gesture
  @param location the logical pixel location of the recognized gesture
  @return Whether the map view should proceed by handling this gesture behavior
@@ -119,6 +73,7 @@ NS_ASSUME_NONNULL_BEGIN
 /**
  Whether the map view should handle a long press gesture.
 
+ @param view the map view attached to the recognizer
  @param recognizer the `UIGestureRecognizer` associated with the gesture
  @param location the logical pixel location of the recognized gesture
  @return Whether the map view should proceed by handling this gesture behavior
@@ -128,6 +83,7 @@ NS_ASSUME_NONNULL_BEGIN
 /**
  Whether the map view should handle a pan gesture.
 
+ @param view the map view attached to the recognizer
  @param recognizer the `UIGestureRecognizer` associated with the gesture
  @param displacement the logical pixel displacement of the recognized gesture
  @return Whether the map view should proceed by handling this gesture behavior
@@ -137,6 +93,7 @@ NS_ASSUME_NONNULL_BEGIN
 /**
  Whether the map view should handle a pinch gesture.
 
+ @param view the map view attached to the recognizer
  @param recognizer the `UIGestureRecognizer` associated with the gesture
  @param location the logical pixel location of the recognized gesture
  @return Whether the map view should proceed by handling this gesture behavior
@@ -147,6 +104,7 @@ NS_ASSUME_NONNULL_BEGIN
 /**
  Whether the map view should handle a rotation gesture.
 
+ @param view the map view attached to the recognizer
  @param recognizer the `UIGestureRecognizer` associated with the gesture
  @param location the logical pixel location of the recognized gesture
  @return Whether the map view should proceed by handling this gesture behavior
@@ -156,6 +114,7 @@ NS_ASSUME_NONNULL_BEGIN
 /**
  Whether the map view should handle a shove gesture.
 
+ @param view the map view attached to the recognizer
  @param recognizer the `UIGestureRecognizer` associated with the gesture
  @param displacement the logical pixel displacement of the recognized gesture
  @return Whether the map view should proceed by handling this gesture behavior
@@ -163,8 +122,27 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)mapView:(TGMapViewController *)view recognizer:(UIGestureRecognizer *)recognizer shouldRecognizeShoveGesture:(CGPoint)displacement;
 
 /**
+ If implemented, the returned value will be the focus for the rotation gesture.
+
+ @param view the map view attached to the recognizer
+ @param recognizer the `UIGestureRecognizer` associated with the gesture
+ @return The screen position the rotation gesture should focus to.
+ */
+- (CGPoint)rotationFocus:(TGMapViewController *)view recognizer:(UIGestureRecognizer *)recognizer;
+
+/**
+ If implemented, the returned value will be the focus for the pinch gesture.
+
+ @param view the map view attached to the recognizer
+ @param recognizer the `UIGestureRecognizer` associated with the gesture
+ @return The screen position the pinch gesture should focus to.
+ */
+- (CGPoint)pinchFocus:(TGMapViewController *)view recognizer:(UIGestureRecognizer *)recognizer;
+
+/**
  Called when the map view just handled a single tap gesture.
 
+ @param view the map view attached to the recognizer
  @param recognizer the `UIGestureRecognizer` associated with the gesture
  @param location the logical pixel location of the recognized gesture
  */
@@ -173,6 +151,7 @@ NS_ASSUME_NONNULL_BEGIN
 /**
  Called when the map view just handled a single double gesture.
 
+ @param view the map view attached to the recognizer
  @param recognizer the `UIGestureRecognizer` associated with the gesture
  @param location the logical pixel location of the recognized gesture
  */
@@ -181,6 +160,7 @@ NS_ASSUME_NONNULL_BEGIN
 /**
  Called when the map view just handled a long press gesture.
 
+ @param view the map view attached to the recognizer
  @param recognizer the `UIGestureRecognizer` associated with the gesture
  @param location the logical pixel location of the recognized gesture
  */
@@ -189,6 +169,7 @@ NS_ASSUME_NONNULL_BEGIN
 /**
  Called when the map view just handled a pan gesture.
 
+ @param view the map view attached to the recognizer
  @param recognizer the `UIGestureRecognizer` associated with the gesture
  @param displacement the logical pixel displacement of the recognized gesture
  */
@@ -197,6 +178,7 @@ NS_ASSUME_NONNULL_BEGIN
 /**
  Called when the map view just handled a pinch gesture.
 
+ @param view the map view attached to the recognizer
  @param recognizer the `UIGestureRecognizer` associated with the gesture
  @param location the logical pixel location of the recognized gesture
  */
@@ -205,6 +187,7 @@ NS_ASSUME_NONNULL_BEGIN
 /**
  Called when the map view just handled a rotation gesture.
 
+ @param view the map view attached to the recognizer
  @param recognizer the `UIGestureRecognizer` associated with the gesture
  @param location the logical pixel location of the recognized gesture
  */
@@ -213,6 +196,7 @@ NS_ASSUME_NONNULL_BEGIN
 /**
  Called when the map view just handled a shove gesture.
 
+ @param view the map view attached to the recognizer
  @param recognizer the `UIGestureRecognizer` associated with the gesture
  @param displacement the logical pixel displacement of the recognized gesture
  */
@@ -229,14 +213,7 @@ NS_ASSUME_NONNULL_END
  */
 @protocol TGMapViewDelegate <NSObject>
 @optional
-/**
- Called after a `-[TGMapViewController loadSceneFileAsync:]` or
- `-[TGMapViewController loadSceneFileAsync:sceneUpdates:]` is completed.
 
- @param mapView a pointer to the map view
- @param scene the path to the scene that has been loaded
- */
-- (void)mapView:(nonnull TGMapViewController *)mapView didLoadSceneAsync:(nonnull NSString *)scene;
 /**
  Always called after the method `-[TGMapViewController pickFeatureAt:]` is called on the map view.
 
@@ -246,7 +223,7 @@ NS_ASSUME_NONNULL_END
 
  @note If no feature have been selected, `feature` will be `nil`, and `position` `(0, 0)`.
  */
-- (void)mapView:(nonnull TGMapViewController *)mapView didSelectFeature:(nullable NSDictionary *)feature atScreenPosition:(CGPoint)position;
+- (void)mapView:(nonnull TGMapViewController *)mapView didSelectFeature:(nullable TGFeatureProperties *)feature atScreenPosition:(CGPoint)position;
  /**
  Always called after the method `-[TGMapViewController pickLabelAt:]` is called on the map view.
 
@@ -273,6 +250,38 @@ NS_ASSUME_NONNULL_END
  @param mapView a pointer to the map view
  */
 - (void)mapViewDidCompleteLoading:(nonnull TGMapViewController *)mapView;
+
+/**
+ Called whenever `-[TGMapViewController captureScreenshot:] is called on the map view.
+
+ @param mapView a pointer to the map view
+ @param screenshot the image object representing the screenshot
+ */
+- (void)mapView:(nonnull TGMapViewController *)view didCaptureScreenshot:(nonnull UIImage *)screenshot;
+
+/**
+ Called after a scene has been loaded or updated.
+
+ See:
+
+ `-[TGMapViewController loadSceneFromURL:]`
+
+ `-[TGMapViewController loadSceneAsyncFromURL:]`
+
+ `-[TGMapViewController loadSceneAsyncFromURL:withUpdates:]`
+
+ `-[TGMapViewController loadSceneFromYAML:relativeToURL:withUpdates:]`
+
+ `-[TGMapViewController loadSceneAsyncFromYAML:relativeToURL:withUpdates:]`
+
+ `-[TGMapViewController updateSceneAsync:]`
+
+ @param mapView A pointer to the map view.
+ @param sceneID The Scene ID of the scene that was just loaded or updated.
+ @param sceneError Any error encountered while loading or updating the scene.
+ */
+- (void)mapView:(nonnull TGMapViewController *)mapView didLoadScene:(int)sceneID withError:(nullable NSError *)sceneError;
+
 @end
 
 NS_ASSUME_NONNULL_BEGIN
@@ -297,13 +306,16 @@ NS_ASSUME_NONNULL_BEGIN
  an API key</a> and load it through your application:
 
  ```swift
- let sceneURL = "https://mapzen.com/carto/walkabout-style-more-labels/walkabout-style-more-labels.yaml";
- view.loadSceneFile(sceneURL, sceneUpdates: [ TGSceneUpdate(path: "sources.mapzen.url_params", value: "{ api_key: \(YOUR_API_KEY) }") ]);
+ let sceneURL = URL("https://mapzen.com/carto/walkabout-style-more-labels/walkabout-style-more-labels.yaml");
+ let sceneUpdates = [ TGSceneUpdate(path: "sources.mapzen.url_params", value: "{ api_key: \(YOUR_API_KEY) }") ];
+ view.loadScene(from: sceneURL, with: sceneUpdates);
  ```
  @note All the screen positions used in this inteface are in _logical pixel_ or _drawing coordinate
  system_ (based on a `UIKit` coordinate system); which is independent of the phone pixel density. Refer the
  <a href="https://developer.apple.com/library/content/documentation/2DDrawing/Conceptual/DrawingPrintingiOS/GraphicsDrawingOverview/GraphicsDrawingOverview.html">Apple documentation</a>
  _Coordinate Systems and Drawing in iOS_ for more informations.
+ The `preferredFramesPerSecond` is set by default to 60, make sure that this value fits the need of
+ your application.
 
  */
 @interface TGMapViewController : GLKViewController <UIGestureRecognizerDelegate>
@@ -344,6 +356,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property (assign, nonatomic) float rotation;
 /// Assign a tilt angle in radians to the map view camera
 @property (assign, nonatomic) float tilt;
+/// Access the markers added to this map view
+@property (readonly, nonatomic) NSArray<TGMarker *>* markers;
 
 /**
  Assign `TGHttpHandler` for network request management.
@@ -358,6 +372,99 @@ NS_ASSUME_NONNULL_BEGIN
  of `TGHttpHandler`.
  */
 @property (strong, nonatomic) TGHttpHandler* httpHandler;
+
+/**
+ Assign the resource root for this map view. Scene file URLs will be resolved
+ relative to this URL.
+
+ Must be non`-nil`.
+
+ @note By default the resource root is the main bundle resource URL. Using the
+ default resource root: `scene.yaml` is resolved to
+ `file://<main bundle path>/Resources/scene.yaml`, `/path/scene.yaml` is
+ resolved to `file:///path/scene.yaml`, and `https://my.host/scene.yaml` is
+ resolved to itself.
+ */
+@property (strong, nonatomic) NSURL* resourceRoot;
+
+/// The selector that must be used as an action on the tap gesture recognizer
+@property (readonly, nonatomic) SEL respondToTapGestureAction;
+/// The selector that must be used as an action on the double tap gesture recognizer
+@property (readonly, nonatomic) SEL respondToDoubleTapGestureAction;
+/// The selector that must be used as an action on the pan gesture recognizer
+@property (readonly, nonatomic) SEL respondToPanGestureAction;
+/// The selector that must be used as an action on the pinch gesture recognizer
+@property (readonly, nonatomic) SEL respondToPinchGestureAction;
+/// The selector that must be used as an action on the rotation gesture recognizer
+@property (readonly, nonatomic) SEL respondToRotationGestureAction;
+/// The selector that must be used as an action on the shove gesture recognizer
+@property (readonly, nonatomic) SEL respondToShoveGestureAction;
+/// The selector that must be used as an action on the long press gesture recognizer
+@property (readonly, nonatomic) SEL respondToLongPressGestureAction;
+
+/// The following recognizers must be set after viewDidLoad in the view lifecycle in order to override default.
+/// Only one instance of the recognizer type will be used on the view at once.
+/// Adding any recognizer removes the default or previoulsy added recognizer on the map view.
+
+/// Replaces the tap gesture recognizer used by the map view, adds it to the UIView, must be non-nil
+@property (strong, nonatomic) UITapGestureRecognizer* tapGestureRecognizer;
+
+/// Replaces the double tap gesture recognizer used by the map view, adds it to the UIView, must be non-nil
+@property (strong, nonatomic) UITapGestureRecognizer* doubleTapGestureRecognizer;
+
+/// Replaces the pan gesture recognizer used by the map view, adds it to the UIView, must be non-nil
+@property (strong, nonatomic) UIPanGestureRecognizer* panGestureRecognizer;
+
+/// Replaces the pinch gesture recognizer used by the map view, adds it to the UIView, must be non-nil
+@property (strong, nonatomic) UIPinchGestureRecognizer* pinchGestureRecognizer;
+
+/// Replaces the rotation gesture recognizer used by the map view, adds it to the UIView, must be non-nil
+@property (strong, nonatomic) UIRotationGestureRecognizer* rotationGestureRecognizer;
+
+/// Replaces the shove gesture recognizer used by the map view, adds it to the UIView, must be non-nil
+@property (strong, nonatomic) UIPanGestureRecognizer* shoveGestureRecognizer;
+
+/// Replaces the long press gesture recognizer used by the map view, adds it to the UIView, must be non-nil
+@property (strong, nonatomic) UILongPressGestureRecognizer* longPressGestureRecognizer;
+
+/**
+ Adds a named data layer to the map. See `TGMapData` for more details.
+
+ @param name the name of the data layer.
+
+ @return the map data, nil if the data source can't be initialized
+
+ @note You cannot create more than one data source with the same name, otherwise the same
+ object will be returned.
+ */
+- (nullable TGMapData *)addDataLayer:(NSString *)name;
+
+/**
+ Adds a named data layer to the map. See `TGMapData` for more details.
+ Refer <a href="https://mapzen.com/documentation/tangram/sources/#generate_label_centroids">label
+ centroid generation</a> documentation for adding a centroid point for label placement for polygon
+ geometry.
+
+ @param name the name of the data layer.
+ @param generateCentroid boolean to control label centroid generation for polygon geometry.
+
+ @return the map data, nil if the data source can't be initialized
+
+ @note You cannot create more than one data source with the same name, otherwise the same
+ object will be returned.
+ */
+- (nullable TGMapData *)addDataLayer:(NSString *)name generateCentroid:(bool)generateCentroid;
+
+/**
+ Asks to capture a screenshot of the map view buffer.
+
+ A delegate should be set to the map view and `-[TGMapViewDelegate didCaptureScreenshot:view:screenshot]`
+ implemented to receive the screenshot image data.
+
+ @param waitForViewComplete whether the view should await for all of the map tiles of the current
+ view to complete building and rendering
+ */
+- (void)captureScreenshot:(BOOL)waitForViewComplete;
 
 #pragma mark Debug toggles
 
@@ -385,205 +492,102 @@ NS_ASSUME_NONNULL_BEGIN
  */
 - (void)toggleDebugFlag:(TGDebugFlag)debugFlag;
 
-#pragma mark Marker interface
-
-/**
- Removes all the markers added to the map view.
- */
-- (void)markerRemoveAll;
-
-/**
- Creates a marker identifier which can be used to dynamically add points and polylines
- to the map.
-
- Example on how to add a point to the map for a geographic coordinate.
-
- ```swift
- var identifier = view.markerAdd()
- view.markerSetStyling(identifier, styling: "{ style: 'points', color: 'white', size: [25px, 25px], order:500 }")
- view.markerSetPoint(identifier, coordinates: TGGeoPointMake(longitude, latitude))
- ```
-
- @return a marker identifier, 0 if adding a marker failed
- @note The marker should be appropriately styled using `-markerSetStyling:styling:`
- and a type must be set (point, polyline, polygon) through `markerSetPoint*`, `markerSetPolyline` or `markerSetPolygon`
- for it to be visible.
-
- @note May return 0 if adding a marker failed, a marker identifier of 0 is non-valid.
- */
-- (TGMapMarkerId)markerAdd;
-
-/**
- Sets the styling for a marker identifier.
-
- See the more detailed scene <a href="https://mapzen.com/documentation/tangram/Styles-Overview/">documentation</a>
- to get more styling informations.
-
- @param identifier the marker identifier created with `-markerAdd`
- @param styling the styling string in YAML syntax to set to the marker
-
- @return `YES` if this operation was successful, `NO` otherwise
-
- @note It is possible to update the marker styling multiple times.
- */
-- (BOOL)markerSetStyling:(TGMapMarkerId)identifier styling:(NSString *)styling;
-
-/**
- Sets a marker to be a single point geometry at a geographic coordinate.
-
- @param identifier the marker identifier created with `-markerAdd`
- @param the longitude and latitude where the marker will be placed
- @return `YES` if this operation was successful, `NO` otherwise
-
- @note Markers can have their geometry set multiple time with possibly different geometry types.
- */
-- (BOOL)markerSetPoint:(TGMapMarkerId)identifier coordinates:(TGGeoPoint)coordinate;
-
-/**
- Similar to `-[TGMapViewController markerSetPoint:coordinates:]` except that the point will transition to the
- geographic coordinate with a transition of time `seconds` and with an ease type function of type `ease`
- (See `TGEaseType`) from its previous coordinate, if a point geometry hasn't been set any coordinate yet,
- this method will act as `-markerSetPoint:coordinates:`.
-
- @param identifier the marker identifier created with `-markerAdd`
- @param the longitude and latitude where the marker will be placed
- @param seconds the animation duration given in seconds
- @param ease the ease function to be used between animation timestep
- @return `YES` if this operation was successful, `NO` otherwise
-
- @note Markers can have their geometry set multiple time with possibly different geometry types.
- */
-- (BOOL)markerSetPointEased:(TGMapMarkerId)identifier coordinates:(TGGeoPoint)coordinate seconds:(float)seconds easeType:(TGEaseType)ease;
-
-/**
- Sets a marker styled to be a polyline (described in a `TGGeoPolyline`).
-
- @param identifier the marker identifier created with `-markerAdd`
- @oaram polyline the polyline geometry to use for this marker
- @return `YES` if this operation was successful, `NO` otherwise
-
- @note Markers can have their geometry set multiple time wwith possibly different geometry types.
- */
-- (BOOL)markerSetPolyline:(TGMapMarkerId)identifier polyline:(TGGeoPolyline *)polyline;
-
-/**
- Sets a marker to be a polygon geometry (described in a `TGGeoPolygon`).
-
- @param identifier the marker identifier created with `-[TGMapViewController markerAdd]`
- @param polygon the polygon geometry to use for this marker
- @return `YES` if this operation was successful, `NO` otherwise
-
- @note Markers can have their geometry set multiple time with possibly different geometry types.
- */
-- (BOOL)markerSetPolygon:(TGMapMarkerId)identifier polygon:(TGGeoPolygon *)polygon;
-
-/**
- Adjusts marker visibility
-
- @param identifier the marker identifier created with `- markerAdd`
- @param whether the marker is set to visible
- @return `YES` if this operation was successful, `NO` otherwise
- */
-- (BOOL)markerSetVisible:(TGMapMarkerId)identifier visible:(BOOL)visible;
-
-/**
- Sets an image loaded with a <a href="https://developer.apple.com/reference/uikit/uiimage">
- UIImage</a> to a marker styled with a <a href="https://mapzen.com/documentation/tangram/Styles-Overview/#points">
- points style</a>.
-
- ```swift
- var identifier = view.markerAdd()
- view.markerSetStyling(identifier, styling: "{ style: 'points', color: 'white', size: [25px, 25px], order:500 }")
- view.markerSetPoint(identifier, coordinates: TGGeoPointMake(longitude, latitude))
- view.markerSetImage(identifier, image: UIIMage(name: "marker-image.png"))
- ```
-
- @param identifier the marker identifier created with `-markerAdd`
- @param the `UIImage` that will be used to be displayed on the marker
- @return `YES` if this operation was successful, `NO` otherwise
-
- @note An image marker must be styled with a
- <a href="https://mapzen.com/documentation/tangram/Styles-Overview/#points">point style</a>.
- */
-- (BOOL)markerSetImage:(TGMapMarkerId)identifier image:(UIImage *)image;
-
-/**
- Removes a marker for a marker identifier.
-
- @param identifier the marker identifier created with `-markerAdd`
- @return `YES` if removal was succesful, `NO` otherwise
- */
-- (BOOL)markerRemove:(TGMapMarkerId)identifier;
-
-#pragma mark Scene loading - updates interface
+#pragma mark Scene loading and updates
 
 /**
  Loads a scene file synchronously.
 
- If the scene file is set as a resource in your application bundle, make sure to resolve
- the path for this URL relative to your bundle (for example `Resources/scene.yaml`).
-
- If your scene is hosted remotely (any path starting with `https://` or `http://` is considered a remote scene file)
- Tangram will automatically load that remote scene file.
-
- @param path the scene path URL
+ @param url An http(s) or file URL for the scene file.
+ @return The integer Scene ID for the new scene or -1 if the scene cannot be loaded.
  */
-- (void)loadSceneFile:(NSString *)path;
+- (int)loadSceneFromURL:(NSURL *)url;
 
 /**
- Loads a scene file (similar to `-loadSceneFile:`), with a list of
- updates to be applied to the scene.
+ Loads a scene file synchronously and modifies it with a list of updates.
 
- @param path the scene path URL
- @param sceneUpdates a list of `TGSceneUpdate` to apply to the scene
+ If an error occurs while applying updates the new scene will not be applied.
+ See `TGSceneUpdate` for details.
+
+ @param url An http(s) or file URL for the scene file.
+ @param updates A list of `TGSceneUpdate` to apply to the scene.
+ @return The integer Scene ID for the new scene or -1 if the scene cannot be loaded.
  */
-- (void)loadSceneFile:(NSString *)path sceneUpdates:(NSArray<TGSceneUpdate *> *)sceneUpdates;
+- (int)loadSceneFromURL:(NSURL *)url withUpdates:(NSArray<TGSceneUpdate *> *)updates;
 
 /**
- Loads a scene file asynchronously, may call `-[TGMapViewDelegate mapView:didLoadSceneAsync:]`
- if a `TGMapViewDelegate` is set to the map view.
+ Loads a scene file asynchronously.
 
- @param path the scene path URL
+ Calls `-[TGMapViewDelegate mapView:didLoadScene:withError:]` on completion if a
+ `TGMapViewDelegate` was provided to the map view.
+
+ @param url An http(s) or file URL for the scene file.
+ @return The integer Scene ID for the new scene or -1 if the scene cannot be loaded.
  */
-- (void)loadSceneFileAsync:(NSString *)path;
+- (int)loadSceneAsyncFromURL:(NSURL *)url;
 
 /**
- Loads a scene asynchronously (similar to `-loadSceneFileAsync:`), with a
- list of updates to be applied to the scene.
+ Loads a scene file asynchronously and modifies it with a list of updates.
 
- @param path the scene path URL
- @param sceneUpdates a list of `TGSceneUpdate` to apply to the scene
+ Calls `-[TGMapViewDelegate mapView:didLoadScene:withError:]` on completion if a
+ `TGMapViewDelegate` was provided to the map view.
+
+ If an error occurs while applying updates the new scene will not be applied.
+ See `TGSceneUpdate` for details.
+
+ @param url An http(s) or file URL for the scene file.
+ @param updates A list of `TGSceneUpdate` to apply to the scene.
+ @return The integer Scene ID for the new scene or -1 if the scene cannot be loaded.
  */
-- (void)loadSceneFileAsync:(NSString *)path sceneUpdates:(NSArray<TGSceneUpdate *> *)sceneUpdates;
+- (int)loadSceneAsyncFromURL:(NSURL *)url withUpdates:(NSArray<TGSceneUpdate *> *)updates;
 
 /**
- Queue a scene update.
+ Loads a scene synchronously from string of YAML and modifies it with a list of updates.
 
- The path is a series of yaml keys separated by a '.' and the value is a string
- of yaml to replace the current value at the given path in the scene.
+ Calls `-[TGMapViewDelegate mapView:didLoadScene:withError:]` on completion if a
+ `TGMapViewDelegate` was provided to the map view.
 
- @param componentPath the path of the scene component to update
- @value the value to assign to the YAML component selected with `componentPath`
+ If an error occurs while applying updates the new scene will not be applied.
+ See `TGSceneUpdate` for details.
 
- @note Scene updates must be applied with `-applySceneUpdates:`
+ @param yaml YAML scene string.
+ @param url The base URL used to resolve relative URLs in the scene.
+ @param updates A list of `TGSceneUpdate` to apply to the scene.
+ @return The integer Scene ID for the new scene or -1 if the scene cannot be loaded.
  */
-- (void)queueSceneUpdate:(NSString*)componentPath withValue:(NSString*)value;
+- (int)loadSceneFromYAML:(NSString *)yaml relativeToURL:(NSURL *)url withUpdates:(NSArray<TGSceneUpdate *> *)updates;
 
 /**
- Queue a list of scene updates.
+ Loads a scene asynchronously from string of YAML and modifies it with a list of updates.
 
- @param sceneUpdates a list of updates to apply to the scene, see `TGSceneUpdate` for more infos
+ Calls `-[TGMapViewDelegate mapView:didLoadScene:withError:]` on completion if a
+ `TGMapViewDelegate` was provided to the map view.
 
- @note Scene updates must be applied with `-applySceneUpdates:`
+ If an error occurs while applying updates the new scene will not be applied.
+ See `TGSceneUpdate` for details.
+
+ @param yaml YAML scene string.
+ @param url The base URL used to resolve relative URLs in the scene.
+ @param updates A list of `TGSceneUpdate` to apply to the scene.
+ @return The integer Scene ID for the new scene or -1 if the scene cannot be loaded.
  */
-- (void)queueSceneUpdates:(NSArray<TGSceneUpdate *> *)sceneUpdates;
+- (int)loadSceneAsyncFromYAML:(NSString *)yaml relativeToURL:(NSURL *)url withUpdates:(NSArray<TGSceneUpdate *> *)updates;
 
 /**
- Apply scene updates queued with `-queueSceneUpdate*` methods.
- */
-- (void)applySceneUpdates;
+ Modify the current scene asynchronously with a list of updates.
 
-#pragma mark Feature picking interface
+ Calls `-[TGMapViewDelegate mapView:didLoadScene:withError:]` on completion if a
+ `TGMapViewDelegate` was provided to the map view.
+
+ If an error occurs while applying updates, no changes will be applied. See
+ `TGSceneUpdate` for details.
+
+ @param updates A list of `TGSceneUpdate` to apply to the scene.
+
+ @return The integer Scene ID for the updated scene or -1 if the scene cannot be updated.
+ */
+- (int)updateSceneAsync:(NSArray<TGSceneUpdate *> *)updates;
+
+#pragma mark Feature picking
 
 /**
  Set the radius in logical pixels to use when picking features on the map (default is `0.5`).
@@ -630,7 +634,8 @@ NS_ASSUME_NONNULL_BEGIN
  To set a marker interactive, you must set it when styling it:
 
  ```swift
- markerSetStyling(markerIdentifier, styling: "{ style: 'points', interactive : true,  color: 'white', size: [30px, 30px], order: 500 }")
+ TGMarker marker;
+ marker.styling = "{ style: 'points', interactive : true,  color: 'white', size: [30px, 30px], order: 500 }"
  ```
 
  @param screenPosition the logical pixels screen position used for the feature selection query
@@ -639,6 +644,32 @@ NS_ASSUME_NONNULL_BEGIN
  `[TGMapViewDelegate mapView:didSelectMarker:atScreenPosition:]`.
  */
 - (void)pickMarkerAt:(CGPoint)screenPosition;
+
+#pragma mark Marker access
+
+/**
+ Removes all the markers added to the map view
+ */
+- (void)markerRemoveAll;
+
+/**
+ Creates a marker to the map and add it
+
+ @return the created marker
+
+ @note The default marker will not be usable until you set its styling, geometry or image depending
+ on your use case.
+ */
+- (TGMarker*)markerAdd;
+
+/**
+ Removes a specific marker
+
+ @param marker The marker pointer to remove
+
+ @note the marker will be unusable after being removed
+ */
+- (void)markerRemove:(TGMarker*)marker;
 
 #pragma mark Map View lifecycle
 

@@ -7,11 +7,13 @@
 //
 
 #import "TGMapViewController.h"
-#import "tangram.h"
+#import "map.h"
 
 @interface TGHelpers : NSObject
 
 + (Tangram::EaseType)convertEaseTypeFrom:(TGEaseType)ease;
++ (TGError)convertTGErrorTypeFrom:(Tangram::Error)error;
++ (NSError *)errorFromSceneError:(Tangram::SceneError)updateError;
 
 @end
 

@@ -3,7 +3,6 @@
 #include "data/tileData.h"
 #include "tile/tile.h"
 #include "tile/tileTask.h"
-#include "util/geoJson.h"
 #include "util/mapProjection.h"
 #include "platform.h"
 
@@ -69,9 +68,9 @@ public:
 
 
 RasterSource::RasterSource(const std::string& _name, std::unique_ptr<DataSource> _sources,
-                           int32_t _minDisplayZoom, int32_t _maxDisplayZoom, int32_t _maxZoom,
-                           TextureOptions _options, bool _genMipmap)
-    : TileSource(_name, std::move(_sources), _minDisplayZoom, _maxDisplayZoom, _maxZoom),
+                           TextureOptions _options, TileSource::ZoomOptions _zoomOptions,
+                           bool _genMipmap)
+    : TileSource(_name, std::move(_sources), _zoomOptions),
       m_texOptions(_options),
       m_genMipmap(_genMipmap) {
 
@@ -149,7 +148,8 @@ std::shared_ptr<TileTask> RasterSource::createTask(TileID _tileId, int _subTask)
 }
 
 Raster RasterSource::getRaster(const TileTask& _task) {
-    TileID id(_task.tileId().x, _task.tileId().y, _task.tileId().z);
+    const auto& taskTileID = _task.tileId();
+    TileID id(taskTileID.x, taskTileID.y, taskTileID.z);
 
     auto texIt = m_textures.find(id);
     if (texIt != m_textures.end()) {
@@ -178,7 +178,7 @@ void RasterSource::clearRaster(const TileID &tileID) {
         raster->clearRaster(rasterID);
     }
 
-    auto rasterID = id.withMaxSourceZoom(m_maxZoom);
+    auto rasterID = id.withMaxSourceZoom(m_zoomOptions.maxZoom);
 
     // We do not want to delete the texture reference from the
     // DS if any of the tiles is still using this as a reference

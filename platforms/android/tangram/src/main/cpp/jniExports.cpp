@@ -1,8 +1,24 @@
-#include "tangram.h"
-#include "platform_android.h"
+#include "androidPlatform.h"
 #include "data/clientGeoJsonSource.h"
+#include "map.h"
 
 #include <cassert>
+
+using namespace Tangram;
+
+std::vector<Tangram::SceneUpdate> unpackSceneUpdates(JNIEnv* jniEnv, jobjectArray updateStrings) {
+    size_t nUpdateStrings = (updateStrings == NULL)? 0 : jniEnv->GetArrayLength(updateStrings);
+
+    std::vector<Tangram::SceneUpdate> sceneUpdates;
+    for (size_t i = 0; i < nUpdateStrings;) {
+        jstring path = (jstring) (jniEnv->GetObjectArrayElement(updateStrings, i++));
+        jstring value = (jstring) (jniEnv->GetObjectArrayElement(updateStrings, i++));
+        sceneUpdates.emplace_back(stringFromJString(jniEnv, path), stringFromJString(jniEnv, value));
+        jniEnv->DeleteLocalRef(path);
+        jniEnv->DeleteLocalRef(value);
+    }
+    return sceneUpdates;
+}
 
 extern "C" {
 
@@ -99,36 +115,77 @@ extern "C" {
     }
 
     JNIEXPORT jlong JNICALL Java_com_mapzen_tangram_MapController_nativeInit(JNIEnv* jniEnv, jobject obj, jobject tangramInstance, jobject assetManager) {
-        setupJniEnv(jniEnv);
-        auto map = new Tangram::Map(std::shared_ptr<Platform>(new AndroidPlatform(jniEnv, assetManager, tangramInstance)));
+        AndroidPlatform::setupJniEnv(jniEnv);
+        auto platform = std::make_shared<Tangram::AndroidPlatform>(jniEnv, assetManager, tangramInstance);
+        auto map = new Tangram::Map(platform);
+        map->setSceneReadyListener([platform](Tangram::SceneID id, const Tangram::SceneError* error) {
+            platform->sceneReadyCallback(id, error);
+        });
         return reinterpret_cast<jlong>(map);
     }
 
     JNIEXPORT void JNICALL Java_com_mapzen_tangram_MapController_nativeDispose(JNIEnv* jniEnv, jobject obj, jlong mapPtr) {
         assert(mapPtr > 0);
         auto map = reinterpret_cast<Tangram::Map*>(mapPtr);
-        AndroidPlatform& androidPlatform = static_cast<AndroidPlatform&>(*map->getPlatform());
-        androidPlatform.dispose(jniEnv);
+        // Don't dispose MapController ref before map is teared down,
+        // delete map or worker threads might call back to it (e.g. requestRender)
+        auto platform = map->getPlatform();
+
         delete map;
+
+        static_cast<Tangram::AndroidPlatform&>(*platform).dispose(jniEnv);
     }
 
-    JNIEXPORT void JNICALL Java_com_mapzen_tangram_MapController_nativeLoadScene(JNIEnv* jniEnv, jobject obj, jlong mapPtr, jstring path, jobjectArray updateStrings) {
+    JNIEXPORT jint JNICALL Java_com_mapzen_tangram_MapController_nativeLoadScene(JNIEnv* jniEnv, jobject obj, jlong mapPtr, jstring path, jobjectArray updateStrings) {
         assert(mapPtr > 0);
         auto map = reinterpret_cast<Tangram::Map*>(mapPtr);
-        const char* cPath = jniEnv->GetStringUTFChars(path, NULL);
-        size_t nUpdateStrings = (updateStrings == NULL) ? 0 : jniEnv->GetArrayLength(updateStrings);
+        auto cPath = stringFromJString(jniEnv, path);
 
-        std::vector<Tangram::SceneUpdate> sceneUpdates;
-        for (size_t i = 0; i < nUpdateStrings;) {
-            jstring path = (jstring) (jniEnv->GetObjectArrayElement(updateStrings, i++));
-            jstring value = (jstring) (jniEnv->GetObjectArrayElement(updateStrings, i++));
-            sceneUpdates.emplace_back(stringFromJString(jniEnv, path), stringFromJString(jniEnv, value));
-            jniEnv->DeleteLocalRef(path);
-            jniEnv->DeleteLocalRef(value);
-        }
+        auto sceneUpdates = unpackSceneUpdates(jniEnv, updateStrings);
+        Url sceneUrl = Url(cPath).resolved("asset:///");
+        jint sceneId = map->loadScene(sceneUrl.string(), false, sceneUpdates);
 
-        map->loadScene(resolveScenePath(cPath).c_str(), false, sceneUpdates);
-        jniEnv->ReleaseStringUTFChars(path, cPath);
+        return sceneId;
+    }
+
+    JNIEXPORT jint JNICALL Java_com_mapzen_tangram_MapController_nativeLoadSceneAsync(JNIEnv* jniEnv, jobject obj, jlong mapPtr, jstring path, jobjectArray updateStrings) {
+        assert(mapPtr > 0);
+        auto map = reinterpret_cast<Tangram::Map*>(mapPtr);
+        auto cPath = stringFromJString(jniEnv, path);
+
+        auto sceneUpdates = unpackSceneUpdates(jniEnv, updateStrings);
+        Url sceneUrl = Url(cPath).resolved("asset:///");
+        jint sceneId = map->loadSceneAsync(sceneUrl.string(), false, sceneUpdates);
+
+        return sceneId;
+
+
+    }
+
+    JNIEXPORT jint JNICALL Java_com_mapzen_tangram_MapController_nativeLoadSceneYaml(JNIEnv* jniEnv, jobject obj, jlong mapPtr, jstring yaml, jstring path, jobjectArray updateStrings) {
+        assert(mapPtr > 0);
+        auto map = reinterpret_cast<Tangram::Map*>(mapPtr);
+        auto cYaml = stringFromJString(jniEnv, yaml);
+        auto cPath = stringFromJString(jniEnv, path);
+
+        auto sceneUpdates = unpackSceneUpdates(jniEnv, updateStrings);
+        Url sceneUrl = Url(cPath).resolved("asset:///");
+        jint sceneId = map->loadSceneYaml(cYaml, sceneUrl.string(), false, sceneUpdates);
+
+        return sceneId;
+    }
+
+    JNIEXPORT jint JNICALL Java_com_mapzen_tangram_MapController_nativeLoadSceneYamlAsync(JNIEnv* jniEnv, jobject obj, jlong mapPtr, jstring yaml, jstring path, jobjectArray updateStrings) {
+        assert(mapPtr > 0);
+        auto map = reinterpret_cast<Tangram::Map*>(mapPtr);
+        auto cYaml = stringFromJString(jniEnv, yaml);
+        auto cPath = stringFromJString(jniEnv, path);
+
+        auto sceneUpdates = unpackSceneUpdates(jniEnv, updateStrings);
+        Url sceneUrl = Url(cPath).resolved("asset:///");
+        jint sceneId = map->loadSceneYamlAsync(cYaml, sceneUrl.string(), false, sceneUpdates);
+
+        return sceneId;
     }
 
     JNIEXPORT void JNICALL Java_com_mapzen_tangram_MapController_nativeResize(JNIEnv* jniEnv, jobject obj, jlong mapPtr, jint width, jint height) {
@@ -150,7 +207,7 @@ extern "C" {
     }
 
     JNIEXPORT void JNICALL Java_com_mapzen_tangram_MapController_nativeSetupGL(JNIEnv* jniEnv, jobject obj, jlong mapPtr) {
-        bindJniEnvToThread(jniEnv);
+        AndroidPlatform::bindJniEnvToThread(jniEnv);
         assert(mapPtr > 0);
         auto map = reinterpret_cast<Tangram::Map*>(mapPtr);
         map->setupGL();
@@ -216,12 +273,11 @@ extern "C" {
         map->handleShoveGesture(distance);
     }
 
-    JNIEXPORT void JNICALL Java_com_mapzen_tangram_MapController_nativeOnUrlSuccess(JNIEnv* jniEnv, jobject obj, jbyteArray fetchedBytes, jlong callbackPtr) {
-        onUrlSuccess(jniEnv, fetchedBytes, callbackPtr);
-    }
-
-    JNIEXPORT void JNICALL Java_com_mapzen_tangram_MapController_nativeOnUrlFailure(JNIEnv* jniEnv, jobject obj, jlong callbackPtr) {
-        onUrlFailure(jniEnv, callbackPtr);
+    JNIEXPORT void JNICALL Java_com_mapzen_tangram_MapController_nativeOnUrlComplete(JNIEnv* jniEnv, jobject obj, jlong mapPtr, jlong requestHandle, jbyteArray fetchedBytes, jstring errorString) {
+        assert(mapPtr > 0);
+        auto map = reinterpret_cast<Tangram::Map*>(mapPtr);
+        auto platform = static_cast<AndroidPlatform*>(map->getPlatform().get());
+        platform->onUrlComplete(jniEnv, requestHandle, fetchedBytes, errorString);
     }
 
     JNIEXPORT void JNICALL Java_com_mapzen_tangram_MapController_nativeSetPickRadius(JNIEnv* jniEnv, jobject obj, jlong mapPtr, jfloat radius) {
@@ -235,7 +291,7 @@ extern "C" {
         auto map = reinterpret_cast<Tangram::Map*>(mapPtr);
         auto object = jniEnv->NewGlobalRef(listener);
         map->pickFeatureAt(posX, posY, [object](auto pickResult) {
-            featurePickCallback(object, pickResult);
+            Tangram::featurePickCallback(object, pickResult);
         });
     }
 
@@ -245,7 +301,7 @@ extern "C" {
         auto object = jniEnv->NewGlobalRef(listener);
         auto instance = jniEnv->NewGlobalRef(tangramInstance);
         map->pickMarkerAt(posX, posY, [object, instance](auto pickMarkerResult) {
-            markerPickCallback(object, instance, pickMarkerResult);
+            Tangram::markerPickCallback(object, instance, pickMarkerResult);
         });
     }
 
@@ -254,7 +310,7 @@ extern "C" {
         auto map = reinterpret_cast<Tangram::Map*>(mapPtr);
         auto object = jniEnv->NewGlobalRef(listener);
         map->pickLabelAt(posX, posY, [object](auto pickResult) {
-            labelPickCallback(object, pickResult);
+            Tangram::labelPickCallback(object, pickResult);
         });
     }
 
@@ -273,11 +329,19 @@ extern "C" {
         return result;
     }
 
-    JNIEXPORT bool JNICALL Java_com_mapzen_tangram_MapController_nativeMarkerSetStyling(JNIEnv* jniEnv, jobject obj, jlong mapPtr, jlong markerID, jstring styling) {
+    JNIEXPORT bool JNICALL Java_com_mapzen_tangram_MapController_nativeMarkerSetStylingFromString(JNIEnv* jniEnv, jobject obj, jlong mapPtr, jlong markerID, jstring styling) {
         assert(mapPtr > 0);
         auto map = reinterpret_cast<Tangram::Map*>(mapPtr);
         auto styleString = stringFromJString(jniEnv, styling);
-        auto result = map->markerSetStyling(static_cast<unsigned int>(markerID), styleString.c_str());
+        auto result = map->markerSetStylingFromString(static_cast<unsigned int>(markerID), styleString.c_str());
+        return result;
+    }
+
+    JNIEXPORT bool JNICALL Java_com_mapzen_tangram_MapController_nativeMarkerSetStylingFromPath(JNIEnv* jniEnv, jobject obj, jlong mapPtr, jlong markerID, jstring path) {
+        assert(mapPtr > 0);
+        auto map = reinterpret_cast<Tangram::Map*>(mapPtr);
+        auto pathString = stringFromJString(jniEnv, path);
+        auto result = map->markerSetStylingFromPath(static_cast<unsigned int>(markerID), pathString.c_str());
         return result;
     }
 
@@ -366,11 +430,11 @@ extern "C" {
         map->markerRemoveAll();
     }
 
-    JNIEXPORT jlong JNICALL Java_com_mapzen_tangram_MapController_nativeAddTileSource(JNIEnv* jniEnv, jobject obj, jlong mapPtr, jstring name) {
+    JNIEXPORT jlong JNICALL Java_com_mapzen_tangram_MapController_nativeAddTileSource(JNIEnv* jniEnv, jobject obj, jlong mapPtr, jstring name, jboolean generateCentroid) {
         assert(mapPtr > 0);
         auto map = reinterpret_cast<Tangram::Map*>(mapPtr);
         auto sourceName = stringFromJString(jniEnv, name);
-        auto source = std::shared_ptr<Tangram::TileSource>(new Tangram::ClientGeoJsonSource(map->getPlatform(), sourceName, ""));
+        auto source = std::shared_ptr<Tangram::TileSource>(new Tangram::ClientGeoJsonSource(map->getPlatform(), sourceName, "", generateCentroid));
         map->addTileSource(source);
         return reinterpret_cast<jlong>(source.get());
     }
@@ -477,39 +541,24 @@ extern "C" {
         jniEnv->ReleaseIntArrayElements(buffer, ptr, JNI_ABORT);
     }
 
-    JNIEXPORT void JNICALL Java_com_mapzen_tangram_MapController_nativeQueueSceneUpdate(JNIEnv* jnienv, jobject obj, jlong mapPtr, jstring path, jstring value) {
+    JNIEXPORT jint JNICALL Java_com_mapzen_tangram_MapController_nativeUpdateScene(JNIEnv* jniEnv, jobject obj, jlong mapPtr, jobjectArray updateStrings) {
         assert(mapPtr > 0);
+
+        auto sceneUpdates = unpackSceneUpdates(jniEnv, updateStrings);
         auto map = reinterpret_cast<Tangram::Map*>(mapPtr);
-        const char* cPath = jnienv->GetStringUTFChars(path, NULL);
-        const char* cValue = jnienv->GetStringUTFChars(value, NULL);
-        map->queueSceneUpdate(cPath, cValue);
-        jnienv->ReleaseStringUTFChars(path, cPath);
-        jnienv->ReleaseStringUTFChars(value, cValue);
+
+        return map->updateSceneAsync(sceneUpdates);
     }
 
-    JNIEXPORT void JNICALL Java_com_mapzen_tangram_MapController_nativeQueueSceneUpdates(JNIEnv* jniEnv, jobject obj, jlong mapPtr, jobjectArray updateStrings) {
-        assert(mapPtr > 0);
-        size_t nUpdateStrings = (updateStrings == NULL)? 0 : jniEnv->GetArrayLength(updateStrings);
-
-        std::vector<Tangram::SceneUpdate> sceneUpdates;
-        for (size_t i = 0; i < nUpdateStrings;) {
-            jstring path = (jstring) (jniEnv->GetObjectArrayElement(updateStrings, i++));
-            jstring value = (jstring) (jniEnv->GetObjectArrayElement(updateStrings, i++));
-            sceneUpdates.emplace_back(stringFromJString(jniEnv, path), stringFromJString(jniEnv, value));
-            jniEnv->DeleteLocalRef(path);
-            jniEnv->DeleteLocalRef(value);
-        }
-
-        if (sceneUpdates.empty()) { return; }
-
-        auto map = reinterpret_cast<Tangram::Map*>(mapPtr);
-        map->queueSceneUpdate(sceneUpdates);
-    }
-
-    JNIEXPORT void JNICALL Java_com_mapzen_tangram_MapController_nativeApplySceneUpdates(JNIEnv* jnienv, jobject obj, jlong mapPtr) {
+    JNIEXPORT void JNICALL Java_com_mapzen_tangram_MapController_nativeOnLowMemory(JNIEnv* jnienv, jobject obj, jlong mapPtr) {
         assert(mapPtr > 0);
         auto map = reinterpret_cast<Tangram::Map*>(mapPtr);
-        map->applySceneUpdates();
+        map->onMemoryWarning();
     }
 
+    JNIEXPORT void JNICALL Java_com_mapzen_tangram_MapController_nativeSetDefaultBackgroundColor(JNIEnv* jnienv, jobject obj, jlong mapPtr, jfloat r, jfloat g, jfloat b) {
+        assert(mapPtr > 0);
+        auto map = reinterpret_cast<Tangram::Map*>(mapPtr);
+        map->setDefaultBackgroundColor(r, g, b);
+    }
 }

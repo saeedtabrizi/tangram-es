@@ -19,13 +19,28 @@
 
 @implementation TGHttpHandler
 
+@synthesize HTTPAdditionalHeaders = _HTTPAdditionalHeaders;
+
+#pragma mark - Initializers
+
 - (instancetype)init
 {
     self = [super init];
 
     if (self) {
-        self.configuration = [TGHttpHandler defaultSessionConfiguration];
-        self.session = [NSURLSession sessionWithConfiguration:self.configuration];
+        [self initialSetupWithConfiguration:[TGHttpHandler defaultSessionConfiguration]];
+    }
+
+    return self;
+}
+
+
+- (instancetype)initWithSessionConfiguration:(NSURLSessionConfiguration *)configuration
+{
+    self = [super init];
+
+    if (self) {
+        [self initialSetupWithConfiguration:configuration];
     }
 
     return self;
@@ -36,13 +51,21 @@
     self = [super init];
 
     if (self) {
-        self.configuration = [TGHttpHandler defaultSessionConfiguration];
+        [self initialSetupWithConfiguration:[TGHttpHandler defaultSessionConfiguration]];
         [self setCachePath:cachePath cacheMemoryCapacity:memoryCapacity cacheDiskCapacity:diskCapacity];
-        self.session = [NSURLSession sessionWithConfiguration:self.configuration];
     }
 
     return self;
 }
+
+- (void)initialSetupWithConfiguration:(NSURLSessionConfiguration *)configuration {
+    self.configuration = configuration;
+    self.session = [NSURLSession sessionWithConfiguration:configuration];
+    self.HTTPAdditionalHeaders = [[NSMutableDictionary alloc] init];
+
+}
+
+#pragma mark - Class Methods
 
 + (NSURLSessionConfiguration*)defaultSessionConfiguration
 {
@@ -54,6 +77,18 @@
     return sessionConfiguration;
 }
 
+#pragma mark - Custom Getter/Setters
+
+- (NSMutableDictionary *)HTTPAdditionalHeaders {
+    return _HTTPAdditionalHeaders;
+}
+
+- (void)setAdditionalHTTPHeaders:(NSMutableDictionary *)HTTPAdditionalHeaders {
+    _HTTPAdditionalHeaders = HTTPAdditionalHeaders;
+    self.configuration.HTTPAdditionalHeaders = HTTPAdditionalHeaders;
+    self.session = [NSURLSession sessionWithConfiguration:self.configuration];
+}
+
 - (void)setCachePath:(NSString*)cachePath cacheMemoryCapacity:(NSUInteger)memoryCapacity cacheDiskCapacity:(NSUInteger)diskCapacity
 {
     NSURLCache* tileCache = [[NSURLCache alloc] initWithMemoryCapacity:memoryCapacity
@@ -62,21 +97,26 @@
 
     self.configuration.URLCache = tileCache;
     self.configuration.requestCachePolicy = NSURLRequestUseProtocolCachePolicy;
+    self.session = [NSURLSession sessionWithConfiguration:self.configuration];
 }
 
-- (void)downloadRequestAsync:(NSString*)url completionHandler:(TGDownloadCompletionHandler)completionHandler
+#pragma mark - Instance Methods
+
+- (NSUInteger)downloadRequestAsync:(NSString*)url completionHandler:(TGDownloadCompletionHandler)completionHandler
 {
     NSURLSessionDataTask* dataTask = [self.session dataTaskWithURL:[NSURL URLWithString:url]
                                                                       completionHandler:completionHandler];
 
     [dataTask resume];
+
+    return [dataTask taskIdentifier];
 }
 
-- (void)cancelDownloadRequestAsync:(NSString*)url
+- (void)cancelDownloadRequestAsync:(NSUInteger)taskIdentifier
 {
     [self.session getTasksWithCompletionHandler:^(NSArray* dataTasks, NSArray* uploadTasks, NSArray* downloadTasks) {
         for (NSURLSessionTask* task in dataTasks) {
-            if ([[task originalRequest].URL.absoluteString isEqualToString:url]) {
+            if ([task taskIdentifier] == taskIdentifier) {
                 [task cancel];
                 break;
             }

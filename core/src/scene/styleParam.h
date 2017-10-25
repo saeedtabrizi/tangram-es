@@ -12,16 +12,43 @@ namespace Tangram {
 struct Stops;
 
 enum class StyleParamKey : uint8_t {
-    text_align,
     anchor,
     angle,
-    text_anchor,
+    buffer,
     cap,
     collide,
-    text_collide,
     color,
     extrude,
     flat,
+    interactive,
+    join,
+    miter_limit,
+    none,
+    offset,
+    order,
+    outline_cap,
+    outline_color,
+    outline_join,
+    outline_miter_limit,
+    outline_order,
+    outline_style,
+    outline_visible,
+    outline_width,
+    placement,
+    placement_min_length_ratio,
+    placement_spacing,
+    point_text,
+    priority,
+    repeat_distance,
+    repeat_group,
+    size,
+    sprite,
+    sprite_default,
+    style,
+    text_align,
+    text_anchor,
+    text_buffer,
+    text_collide,
     text_font_family,
     text_font_fill,
     text_font_size,
@@ -29,51 +56,30 @@ enum class StyleParamKey : uint8_t {
     text_font_stroke_width,
     text_font_style,
     text_font_weight,
-    interactive,
     text_interactive,
-    join,
-    miter_limit,
-    none,
-    offset,
+    text_max_lines,
     text_offset,
-    order,
-    outline_cap,
-    outline_color,
-    outline_join,
-    outline_miter_limit,
-    outline_order,
-    outline_width,
-    outline_style,
-    outline_visible,
-    placement,
-    placement_spacing,
-    placement_min_length_ratio,
-    priority,
-    repeat_distance,
-    repeat_group,
+    text_optional,
     text_order,
     text_priority,
     text_repeat_distance,
     text_repeat_group,
-    size,
-    sprite,
-    sprite_default,
-    style,
     text_source,
-    text_wrap,
-    tile_edges,
+    text_source_left,
+    text_source_right,
     text_transform,
-    transition_hide_time,
-    transition_selected_time,
-    transition_show_time,
-    text_optional,
     text_transition_hide_time,
     text_transition_selected_time,
     text_transition_show_time,
     text_visible,
+    text_wrap,
+    texture,
+    tile_edges,
+    transition_hide_time,
+    transition_selected_time,
+    transition_show_time,
     visible,
     width,
-    point_text,
     NUM_ELEMENTS
 };
 
@@ -139,8 +145,16 @@ struct StyleParam {
         }
     };
 
-    using Value = variant<Undefined, none_type, bool, float, uint32_t, std::string, glm::vec2,
-                            Width, LabelProperty::Placement, LabelProperty::Anchors>;
+
+    struct TextSource {
+        std::vector<std::string> keys;
+        bool operator==(const TextSource& _other) const {
+            return keys == _other.keys;
+        }
+    };
+
+    using Value = variant<none_type, Undefined, bool, float, uint32_t, std::string, glm::vec2, Width,
+                          LabelProperty::Placement, LabelProperty::Anchors, TextSource>;
 
     StyleParam() :
         key(StyleParamKey::none),
@@ -177,8 +191,8 @@ struct StyleParam {
     static bool parseTime(const std::string& _value, float& _time);
 
     // values within _value string parameter must be delimited by ','
-    static bool parseVec2(const std::string& _value, const std::vector<Unit> _allowedUnits, UnitVec<glm::vec2>& _vec2);
-    static bool parseVec3(const std::string& _value, const std::vector<Unit> _allowedUnits, UnitVec<glm::vec3>& _vec3);
+    static bool parseVec2(const std::string& _value, const std::vector<Unit>& _allowedUnits, UnitVec<glm::vec2>& _vec2);
+    static bool parseVec3(const std::string& _value, const std::vector<Unit>& _allowedUnits, UnitVec<glm::vec3>& _vec3);
 
     static int parseValueUnitPair(const std::string& _value, size_t start,
                                   StyleParam::ValueUnitPair& _result);

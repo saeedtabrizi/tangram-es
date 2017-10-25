@@ -9,7 +9,7 @@ if [[ ${PLATFORM} == "osx" || ${PLATFORM} == "linux" ]]; then
 
     pushd ./build/${PLATFORM}/bin
     # a tile for testing
-    curl -L  https://vector.mapzen.com/osm/all/10/301/384.mvt | gunzip > tile.mvt
+    curl --compressed -L -o tile.mvt https://tile.mapzen.com/mapzen/vector/v1/all/10/301/384.mvt?api_key=${MAPZEN_API_KEY}
 
     for file in bench/*.out
         do

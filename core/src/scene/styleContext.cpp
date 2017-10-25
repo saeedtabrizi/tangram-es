@@ -144,6 +144,7 @@ void StyleContext::parseSceneGlobals(const YAML::Node& node) {
             break;
         }
     default:
+        duk_push_null(m_ctx);
         break;
     }
 }
@@ -353,7 +354,17 @@ void StyleContext::parseStyleResult(StyleParamKey _key, StyleParam::Value& _val)
 
     if (duk_is_string(m_ctx, -1)) {
         std::string value(duk_get_string(m_ctx, -1));
-        _val = StyleParam::parseString(_key, value);
+
+        switch (_key) {
+            case StyleParamKey::text_source:
+            case StyleParamKey::text_source_left:
+            case StyleParamKey::text_source_right:
+                _val = value;
+                break;
+            default:
+                _val = StyleParam::parseString(_key, value);
+                break;
+        }
 
     } else if (duk_is_boolean(m_ctx, -1)) {
         bool value = duk_get_boolean(m_ctx, -1);
@@ -421,10 +432,7 @@ void StyleContext::parseStyleResult(StyleParamKey _key, StyleParam::Value& _val)
                     duk_pop(m_ctx);
                 }
 
-                _val = (((uint32_t)(255.0 * a) & 0xff) << 24) |
-                       (((uint32_t)(255.0 * r) & 0xff)<< 16) |
-                       (((uint32_t)(255.0 * g) & 0xff)<< 8) |
-                       (((uint32_t)(255.0 * b) & 0xff));
+                _val = ColorF(r, g, b, a).toColor().abgr;
                 break;
             }
             default:
@@ -437,6 +445,11 @@ void StyleContext::parseStyleResult(StyleParamKey _key, StyleParam::Value& _val)
     } else if (duk_is_number(m_ctx, -1)) {
 
         switch (_key) {
+            case StyleParamKey::text_source:
+            case StyleParamKey::text_source_left:
+            case StyleParamKey::text_source_right:
+                _val = doubleToString(static_cast<double>(duk_get_number(m_ctx, -1)));
+                break;
             case StyleParamKey::extrude:
                 _val = glm::vec2(0.f, static_cast<float>(duk_get_number(m_ctx, -1)));
                 break;
@@ -456,6 +469,10 @@ void StyleContext::parseStyleResult(StyleParamKey _key, StyleParam::Value& _val)
             case StyleParamKey::text_font_stroke_width:
             case StyleParamKey::placement_min_length_ratio: {
                 _val = static_cast<float>(duk_get_number(m_ctx, -1));
+                break;
+            }
+            case StyleParamKey::size: {
+                _val = glm::vec2(static_cast<float>(duk_get_number(m_ctx, -1)));
                 break;
             }
             case StyleParamKey::order:

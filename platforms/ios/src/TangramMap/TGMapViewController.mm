@@ -8,28 +8,73 @@
 //  Copyright (c) 2017 Mapzen. All rights reserved.
 //
 
-#import "TGMapViewController.h"
+#import "TGMapViewController+Internal.h"
+#import "TGMapData+Internal.h"
+#import "TGMarkerPickResult+Internal.h"
+#import "TGLabelPickResult+Internal.h"
+#import "TGMarker+Internal.h"
 #import "TGHelpers.h"
-#import "platform_ios.h"
 #import "data/propertyItem.h"
-#import "tangram.h"
+#import "iosPlatform.h"
+#import "map.h"
 
+#import <unordered_map>
 #import <functional>
 
-__CG_STATIC_ASSERT(sizeof(TGMapMarkerId) == sizeof(Tangram::MarkerID));
 __CG_STATIC_ASSERT(sizeof(TGGeoPoint) == sizeof(Tangram::LngLat));
 
-@interface TGMapViewController ()
+@interface TGMapViewController () {
+    BOOL shouldCaptureFrame;
+    BOOL captureFrameWaitForViewComplete;
+    BOOL viewComplete;
+}
 
-@property (nullable, copy, nonatomic) NSString* scenePath;
 @property (nullable, strong, nonatomic) EAGLContext* context;
 @property (assign, nonatomic) CGFloat contentScaleFactor;
 @property (assign, nonatomic) BOOL renderRequested;
-@property (assign, nonatomic, nullable) Tangram::Map* map;
+@property (strong, nonatomic) NSMutableDictionary* markersById;
+@property (strong, nonatomic) NSMutableDictionary* dataLayersByName;
 
 @end
 
 @implementation TGMapViewController
+
+- (NSArray<TGMarker *> *)markers
+{
+    if (!self.map) {
+        NSArray* values = [[NSArray alloc] init];
+        return values;
+    }
+
+    return [self.markersById allValues];
+}
+
+- (TGMarker*)markerAdd
+{
+    TGMarker* marker = [[TGMarker alloc] initWithMap:self.map];
+    NSString* key = [NSString stringWithFormat:@"%d", (NSUInteger)marker.identifier];
+    self.markersById[key] = marker;
+    return marker;
+}
+
+- (void)markerRemove:(TGMarker *)marker
+{
+    NSString* key = [NSString stringWithFormat:@"%d", (NSUInteger)marker.identifier];
+    self.map->markerRemove(marker.identifier);
+    [self.markersById removeObjectForKey:key];
+    marker.identifier = 0;
+}
+
+- (void)markerRemoveAll
+{
+    if (!self.map) { return; }
+    for (id markerId in self.markersById) {
+        TGMarker* marker = [self.markersById objectForKey:markerId];
+        marker.identifier = 0;
+    }
+    [self.markersById removeAllObjects];
+    self.map->markerRemoveAll();
+}
 
 - (void)setDebugFlag:(TGDebugFlag)debugFlag value:(BOOL)on
 {
@@ -46,89 +91,146 @@ __CG_STATIC_ASSERT(sizeof(TGGeoPoint) == sizeof(Tangram::LngLat));
     Tangram::toggleDebugFlag((Tangram::DebugFlags)debugFlag);
 }
 
+- (TGMapData *)addDataLayer:(NSString *)name
+{
+    return [self addDataLayer:name generateCentroid:false];
+}
+
+- (TGMapData *)addDataLayer:(NSString *)name generateCentroid:(bool)generateCentroid
+{
+    if (!self.map) { return nil; }
+
+    std::string dataLayerName = std::string([name UTF8String]);
+    auto source = std::make_shared<Tangram::ClientGeoJsonSource>(self.map->getPlatform(),
+                    dataLayerName, "", generateCentroid);
+    self.map->addTileSource(source);
+
+    __weak TGMapViewController* weakSelf = self;
+    TGMapData* clientData = [[TGMapData alloc] initWithMapView:weakSelf name:name source:source];
+    self.dataLayersByName[name] = clientData;
+
+    return clientData;
+}
+
+- (BOOL)removeDataSource:(std::shared_ptr<Tangram::TileSource>)tileSource name:(NSString *)name
+{
+    if (!self.map || !tileSource) { return; }
+
+    [self.dataLayersByName removeObjectForKey:name];
+    return self.map->removeTileSource(*tileSource);
+}
+
+- (void)clearDataSource:(std::shared_ptr<Tangram::TileSource>)tileSource
+{
+    if (!self.map || !tileSource) { return; }
+
+    self.map->clearTileSource(*tileSource, true, true);
+}
+
 #pragma mark Scene loading interface
 
-- (void)loadSceneFile:(NSString*)path
+std::vector<Tangram::SceneUpdate> unpackSceneUpdates(NSArray<TGSceneUpdate *> *sceneUpdates)
 {
-    [self loadSceneFile:path sceneUpdates:nil];
-}
-
-- (void)loadSceneFileAsync:(NSString*)path
-{
-    [self loadSceneFileAsync:path sceneUpdates:nil];
-}
-
-- (void)loadSceneFile:(NSString *)path sceneUpdates:(NSArray<TGSceneUpdate *> *)sceneUpdates
-{
-    if (!self.map) { return; }
-
     std::vector<Tangram::SceneUpdate> updates;
-
     if (sceneUpdates) {
         for (TGSceneUpdate* update in sceneUpdates) {
             updates.push_back({std::string([update.path UTF8String]), std::string([update.value UTF8String])});
         }
     }
-
-    self.scenePath = path;
-    self.map->loadScene([path UTF8String], false, updates);
-    self.renderRequested = YES;
+    return updates;
 }
 
-- (void)loadSceneFileAsync:(NSString *)path sceneUpdates:(NSArray<TGSceneUpdate *> *)sceneUpdates
-{
-    if (!self.map) { return; }
+- (Tangram::SceneReadyCallback)sceneReadyListener {
+    __weak TGMapViewController* weakSelf = self;
 
-    self.scenePath = path;
+    return [weakSelf](int sceneID, auto sceneError) {
+        __strong TGMapViewController* strongSelf = weakSelf;
 
-    MapReady onReadyCallback = [self, path](void* _userPtr) -> void {
-        if (self.mapViewDelegate && [self.mapViewDelegate respondsToSelector:@selector(mapView:didLoadSceneAsync:)]) {
-            [self.mapViewDelegate mapView:self didLoadSceneAsync:path];
+        if (!strongSelf) {
+            return;
         }
 
-        self.renderRequested = YES;
+        [strongSelf.markersById removeAllObjects];
+        [strongSelf renderOnce];
+
+        if (!strongSelf.mapViewDelegate || ![strongSelf.mapViewDelegate respondsToSelector:@selector(mapView:didLoadScene:withError:)]) {
+            return;
+        }
+
+        NSError* error = nil;
+
+        if (sceneError) {
+            error = [TGHelpers errorFromSceneError:*sceneError];
+        }
+
+        [strongSelf.mapViewDelegate mapView:strongSelf didLoadScene:sceneID withError:error];
     };
+}
 
-    std::vector<Tangram::SceneUpdate> updates;
+- (int)loadSceneFromURL:(NSURL *)url
+{
+    return [self loadSceneFromURL:url withUpdates:nil];
+}
 
-    if (sceneUpdates) {
-        for (TGSceneUpdate* update in sceneUpdates) {
-            updates.push_back({std::string([update.path UTF8String]), std::string([update.value UTF8String])});
-        }
-    }
+- (int)loadSceneAsyncFromURL:(NSURL *)url
+{
+    return [self loadSceneAsyncFromURL:url withUpdates:nil];
+}
 
-    self.map->loadSceneAsync([path UTF8String], false, onReadyCallback, nullptr, updates);
+- (int)loadSceneFromURL:(NSURL *)url withUpdates:(NSArray<TGSceneUpdate *> *)updates
+{
+    if (!self.map) { return -1; }
+
+    auto sceneUpdates = unpackSceneUpdates(updates);
+
+    self.map->setSceneReadyListener([self sceneReadyListener]);
+    return self.map->loadScene([[url absoluteString] UTF8String], false, sceneUpdates);
+}
+
+- (int)loadSceneAsyncFromURL:(NSURL *)url withUpdates:(NSArray<TGSceneUpdate *> *)updates
+{
+    if (!self.map) { return -1; }
+
+    auto sceneUpdates = unpackSceneUpdates(updates);
+
+    self.map->setSceneReadyListener([self sceneReadyListener]);
+    return self.map->loadSceneAsync([[url absoluteString] UTF8String], false, sceneUpdates);
+}
+
+- (int)loadSceneFromYAML:(NSString *)yaml relativeToURL:(NSURL *)url withUpdates:(NSArray<TGSceneUpdate *> *)updates
+{
+    if (!self.map) { return -1; }
+
+    auto sceneUpdates = unpackSceneUpdates(updates);
+
+    self.map->setSceneReadyListener([self sceneReadyListener]);
+    return self.map->loadSceneYaml([yaml UTF8String], [[url absoluteString] UTF8String], false, sceneUpdates);
+}
+
+- (int)loadSceneAsyncFromYAML:(NSString *)yaml relativeToURL:(NSURL *)url withUpdates:(NSArray<TGSceneUpdate *> *)updates
+{
+    if (!self.map) { return -1; }
+
+    auto sceneUpdates = unpackSceneUpdates(updates);
+
+    self.map->setSceneReadyListener([self sceneReadyListener]);
+    return self.map->loadSceneYamlAsync([yaml UTF8String], [[url absoluteString] UTF8String], false, sceneUpdates);
 }
 
 #pragma mark Scene updates
 
-- (void)queueSceneUpdates:(NSArray<TGSceneUpdate *> *)sceneUpdates
+- (int)updateSceneAsync:(NSArray<TGSceneUpdate *> *)updates
 {
-    if (!self.map) { return; }
+    if (!self.map) { return -1; }
 
-    std::vector<Tangram::SceneUpdate> updates;
-
-    if (sceneUpdates) {
-        for (TGSceneUpdate* update in sceneUpdates) {
-            updates.push_back({std::string([update.path UTF8String]), std::string([update.value UTF8String])});
-        }
+    if (!updates || ![updates count]) {
+        return -1;
     }
 
-    self.map->queueSceneUpdate(updates);
-}
+    auto sceneUpdates = unpackSceneUpdates(updates);
 
-- (void)queueSceneUpdate:(NSString*)componentPath withValue:(NSString*)value
-{
-    if (!self.map) { return; }
-
-    self.map->queueSceneUpdate([componentPath UTF8String], [value UTF8String]);
-}
-
-- (void)applySceneUpdates
-{
-    if (!self.map) { return; }
-
-    self.map->applySceneUpdates();
+    self.map->setSceneReadyListener([self sceneReadyListener]);
+    return self.map->updateSceneAsync(sceneUpdates);
 }
 
 #pragma mark Longitude/Latitude - Screen position conversions
@@ -186,30 +288,34 @@ __CG_STATIC_ASSERT(sizeof(TGGeoPoint) == sizeof(Tangram::LngLat));
     screenPosition.x *= self.contentScaleFactor;
     screenPosition.y *= self.contentScaleFactor;
 
-    self.map->pickFeatureAt(screenPosition.x, screenPosition.y, [screenPosition, self](const Tangram::FeaturePickResult* featureResult) {
-        if (!self.mapViewDelegate || ![self.mapViewDelegate respondsToSelector:@selector(mapView:didSelectFeature:atScreenPosition:)]) {
+    __weak TGMapViewController* weakSelf = self;
+    self.map->pickFeatureAt(screenPosition.x, screenPosition.y, [weakSelf](const Tangram::FeaturePickResult* featureResult) {
+        __strong TGMapViewController* strongSelf = weakSelf;
+
+        if (!strongSelf || !strongSelf.mapViewDelegate || ![strongSelf.mapViewDelegate respondsToSelector:@selector(mapView:didSelectFeature:atScreenPosition:)]) {
             return;
         }
 
         CGPoint position = CGPointMake(0.0, 0.0);
 
         if (!featureResult) {
-            [self.mapViewDelegate mapView:self didSelectFeature:nil atScreenPosition:position];
+            [strongSelf.mapViewDelegate mapView:strongSelf didSelectFeature:nil atScreenPosition:position];
             return;
         }
 
-        NSMutableDictionary* dictionary = [[NSMutableDictionary alloc] init];
+        NSMutableDictionary* featureProperties = [[NSMutableDictionary alloc] init];
 
         const auto& properties = featureResult->properties;
-        position = CGPointMake(featureResult->position[0] / self.contentScaleFactor, featureResult->position[1] / self.contentScaleFactor);
+        position = CGPointMake(featureResult->position[0] / strongSelf.contentScaleFactor,
+                               featureResult->position[1] / strongSelf.contentScaleFactor);
 
         for (const auto& item : properties->items()) {
             NSString* key = [NSString stringWithUTF8String:item.key.c_str()];
             NSString* value = [NSString stringWithUTF8String:properties->asString(item.value).c_str()];
-            dictionary[key] = value;
+            featureProperties[key] = value;
         }
 
-        [self.mapViewDelegate mapView:self didSelectFeature:dictionary atScreenPosition:position];
+        [strongSelf.mapViewDelegate mapView:strongSelf didSelectFeature:featureProperties atScreenPosition:position];
     });
 }
 
@@ -220,23 +326,37 @@ __CG_STATIC_ASSERT(sizeof(TGGeoPoint) == sizeof(Tangram::LngLat));
     screenPosition.x *= self.contentScaleFactor;
     screenPosition.y *= self.contentScaleFactor;
 
-    self.map->pickMarkerAt(screenPosition.x, screenPosition.y, [screenPosition, self](const Tangram::MarkerPickResult* markerPickResult) {
-        if (!self.mapViewDelegate || ![self.mapViewDelegate respondsToSelector:@selector(mapView:didSelectMarker:atScreenPosition:)]) {
+    __weak TGMapViewController* weakSelf = self;
+    self.map->pickMarkerAt(screenPosition.x, screenPosition.y, [weakSelf](const Tangram::MarkerPickResult* markerPickResult) {
+        __strong TGMapViewController* strongSelf = weakSelf;
+
+        if (!strongSelf || !strongSelf.mapViewDelegate || ![strongSelf.mapViewDelegate respondsToSelector:@selector(mapView:didSelectMarker:atScreenPosition:)]) {
             return;
         }
 
         CGPoint position = CGPointMake(0.0, 0.0);
 
         if (!markerPickResult) {
-            [self.mapViewDelegate mapView:self didSelectMarker:nil atScreenPosition:position];
+            [strongSelf.mapViewDelegate mapView:strongSelf didSelectMarker:nil atScreenPosition:position];
             return;
         }
 
-        position = CGPointMake(markerPickResult->position[0] / self.contentScaleFactor, markerPickResult->position[1] / self.contentScaleFactor);
-        TGGeoPoint coordinates = TGGeoPointMake(markerPickResult->coordinates.longitude, markerPickResult->coordinates.latitude);
-        TGMarkerPickResult* result = [[TGMarkerPickResult alloc] initWithCoordinates:coordinates identifier:markerPickResult->id];
+        NSString* key = [NSString stringWithFormat:@"%d", (NSUInteger)markerPickResult->id];
+        TGMarker* marker = [strongSelf.markersById objectForKey:key];
 
-        [self.mapViewDelegate mapView:self didSelectMarker:result atScreenPosition:position];
+        if (!marker) {
+            [strongSelf.mapViewDelegate mapView:strongSelf didSelectMarker:nil atScreenPosition:position];
+            return;
+        }
+
+        position = CGPointMake(markerPickResult->position[0] / strongSelf.contentScaleFactor,
+                               markerPickResult->position[1] / strongSelf.contentScaleFactor);
+
+        TGGeoPoint coordinates = TGGeoPointMake(markerPickResult->coordinates.longitude,
+                                                markerPickResult->coordinates.latitude);
+
+        TGMarkerPickResult* result = [[TGMarkerPickResult alloc] initWithCoordinates:coordinates marker:marker];
+        [strongSelf.mapViewDelegate mapView:strongSelf didSelectMarker:result atScreenPosition:position];
     });
 }
 
@@ -247,127 +367,40 @@ __CG_STATIC_ASSERT(sizeof(TGGeoPoint) == sizeof(Tangram::LngLat));
     screenPosition.x *= self.contentScaleFactor;
     screenPosition.y *= self.contentScaleFactor;
 
-    self.map->pickLabelAt(screenPosition.x, screenPosition.y, [screenPosition, self](const Tangram::LabelPickResult* labelPickResult) {
-        if (!self.mapViewDelegate || ![self.mapViewDelegate respondsToSelector:@selector(mapView:didSelectLabel:atScreenPosition:)]) {
+    __weak TGMapViewController* weakSelf = self;
+    self.map->pickLabelAt(screenPosition.x, screenPosition.y, [weakSelf](const Tangram::LabelPickResult* labelPickResult) {
+        __strong TGMapViewController* strongSelf = weakSelf;
+
+        if (!strongSelf || !strongSelf.mapViewDelegate || ![strongSelf.mapViewDelegate respondsToSelector:@selector(mapView:didSelectLabel:atScreenPosition:)]) {
             return;
         }
 
         CGPoint position = CGPointMake(0.0, 0.0);
 
         if (!labelPickResult) {
-            [self.mapViewDelegate mapView:self didSelectLabel:nil atScreenPosition:position];
+            [strongSelf.mapViewDelegate mapView:strongSelf didSelectLabel:nil atScreenPosition:position];
             return;
         }
 
-        NSMutableDictionary* dictionary = [[NSMutableDictionary alloc] init];
+        NSMutableDictionary* featureProperties = [[NSMutableDictionary alloc] init];
 
         const auto& touchItem = labelPickResult->touchItem;
         const auto& properties = touchItem.properties;
-        position = CGPointMake(touchItem.position[0] / self.contentScaleFactor, touchItem.position[1] / self.contentScaleFactor);
+        position = CGPointMake(touchItem.position[0] / strongSelf.contentScaleFactor,
+                               touchItem.position[1] / strongSelf.contentScaleFactor);
 
         for (const auto& item : properties->items()) {
             NSString* key = [NSString stringWithUTF8String:item.key.c_str()];
             NSString* value = [NSString stringWithUTF8String:properties->asString(item.value).c_str()];
-            dictionary[key] = value;
+            featureProperties[key] = value;
         }
 
         TGGeoPoint coordinates = TGGeoPointMake(labelPickResult->coordinates.longitude, labelPickResult->coordinates.latitude);
         TGLabelPickResult* tgLabelPickResult = [[TGLabelPickResult alloc] initWithCoordinates:coordinates
                                                                                          type:(TGLabelType)labelPickResult->type
-                                                                                   properties:dictionary];
-        [self.mapViewDelegate mapView:self didSelectLabel:tgLabelPickResult atScreenPosition:position];
+                                                                                   properties:featureProperties];
+        [strongSelf.mapViewDelegate mapView:strongSelf didSelectLabel:tgLabelPickResult atScreenPosition:position];
     });
-}
-
-#pragma mark Marker implementation
-
-- (TGMapMarkerId)markerAdd
-{
-    if (!self.map) { return 0; }
-
-    return (TGMapMarkerId)self.map->markerAdd();
-}
-
-- (BOOL)markerRemove:(TGMapMarkerId)marker
-{
-    if (!self.map) { return NO; }
-
-    return self.map->markerRemove(marker);
-}
-
-- (void)markerRemoveAll
-{
-    if (!self.map) { return; }
-
-    self.map->markerRemoveAll();
-}
-
-- (BOOL)markerSetStyling:(TGMapMarkerId)identifier styling:(NSString *)styling
-{
-    if (!self.map) { return NO; }
-
-    return self.map->markerSetStyling(identifier, [styling UTF8String]);
-}
-
-- (BOOL)markerSetPoint:(TGMapMarkerId)identifier coordinates:(TGGeoPoint)coordinates
-{
-    if (!self.map || !identifier) { return NO; }
-
-    Tangram::LngLat lngLat(coordinates.longitude, coordinates.latitude);
-
-    return self.map->markerSetPoint(identifier, lngLat);
-}
-
-- (BOOL)markerSetPointEased:(TGMapMarkerId)identifier coordinates:(TGGeoPoint)coordinates seconds:(float)seconds easeType:(TGEaseType)ease
-{
-    if (!self.map || !identifier) { return NO; }
-
-    Tangram::LngLat lngLat(coordinates.longitude, coordinates.latitude);
-
-    return self.map->markerSetPointEased(identifier, lngLat, seconds, [TGHelpers convertEaseTypeFrom:ease]);
-}
-
-- (BOOL)markerSetPolyline:(TGMapMarkerId)identifier polyline:(TGGeoPolyline *)polyline
-{
-    if (polyline.count < 2 || !identifier) { return NO; }
-
-    return self.map->markerSetPolyline(identifier, reinterpret_cast<Tangram::LngLat*>([polyline coordinates]), polyline.count);
-}
-
-- (BOOL)markerSetPolygon:(TGMapMarkerId)identifier polygon:(TGGeoPolygon *)polygon;
-{
-    if (polygon.count < 3 || !identifier) { return NO; }
-
-    auto coords = reinterpret_cast<Tangram::LngLat*>([polygon coordinates]);
-
-    return self.map->markerSetPolygon(identifier, coords, [polygon rings], [polygon ringsCount]);
-}
-
-- (BOOL)markerSetVisible:(TGMapMarkerId)identifier visible:(BOOL)visible
-{
-    if (!self.map) { return NO; }
-
-    return self.map->markerSetVisible(identifier, visible);
-}
-
-- (BOOL)markerSetImage:(TGMapMarkerId)identifier image:(UIImage *)image
-{
-    if (!self.map) { return NO; }
-
-    CGImage* cgImage = [image CGImage];
-    size_t w = CGImageGetHeight(cgImage);
-    size_t h = CGImageGetWidth(cgImage);
-    std::vector<unsigned int> bitmap;
-    bitmap.resize(w * h);
-
-    CGColorSpaceRef colorSpace = CGImageGetColorSpace(cgImage);
-    CGContextRef cgContext = CGBitmapContextCreate(bitmap.data(), w, h, 8, w * 4, colorSpace, kCGImageAlphaPremultipliedLast);
-    CGAffineTransform flipAffineTransform = CGAffineTransformMake(1, 0, 0, -1, 0, h);
-    CGContextConcatCTM(cgContext, flipAffineTransform);
-    CGContextDrawImage(cgContext, CGRectMake(0, 0, w, h), cgImage);
-    CGContextRelease(cgContext);
-
-    return self.map->markerSetBitmap(identifier, w, h, bitmap.data());
 }
 
 #pragma mark Map position implementation
@@ -503,7 +536,7 @@ __CG_STATIC_ASSERT(sizeof(TGGeoPoint) == sizeof(Tangram::LngLat));
 
 - (void)setCameraType:(TGCameraType)cameraType
 {
-    if (!self.map){ return; }
+    if (!self.map) { return; }
 
     self.map->setCameraType(cameraType);
 }
@@ -512,56 +545,142 @@ __CG_STATIC_ASSERT(sizeof(TGGeoPoint) == sizeof(Tangram::LngLat));
 
 - (void)setupGestureRecognizers
 {
-    /* Construct Gesture Recognizers */
-    //1. Tap
-    UITapGestureRecognizer* tapRecognizer = [[UITapGestureRecognizer alloc]
-                                             initWithTarget:self action:@selector(respondToTapGesture:)];
-    tapRecognizer.numberOfTapsRequired = 1;
+    _tapGestureRecognizer = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(respondToTapGesture:)];
+    _tapGestureRecognizer.numberOfTapsRequired = 1;
     // TODO: Figure a way to have a delay set for it not to tap gesture not to wait long enough for a doubletap gesture to be recognized
-    tapRecognizer.delaysTouchesEnded = NO;
+    _tapGestureRecognizer.delaysTouchesEnded = NO;
 
-    //2. DoubleTap
-    UITapGestureRecognizer* doubleTapRecognizer = [[UITapGestureRecognizer alloc]
-                                                   initWithTarget:self action:@selector(respondToDoubleTapGesture:)];
-    doubleTapRecognizer.numberOfTapsRequired = 2;
+    _doubleTapGestureRecognizer = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(respondToDoubleTapGesture:)];
+    _doubleTapGestureRecognizer.numberOfTapsRequired = 2;
     // Distanle single tap when double tap occurs
-    [tapRecognizer requireGestureRecognizerToFail:doubleTapRecognizer];
+    [_tapGestureRecognizer requireGestureRecognizerToFail:_doubleTapGestureRecognizer];
 
-    //3. Pan
-    UIPanGestureRecognizer* panRecognizer = [[UIPanGestureRecognizer alloc]
-                                             initWithTarget:self action:@selector(respondToPanGesture:)];
-    panRecognizer.maximumNumberOfTouches = 1;
+    _panGestureRecognizer = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(respondToPanGesture:)];
+    _panGestureRecognizer.maximumNumberOfTouches = 1;
 
-    //4. Pinch
-    UIPinchGestureRecognizer* pinchRecognizer = [[UIPinchGestureRecognizer alloc]
-                                                 initWithTarget:self action:@selector(respondToPinchGesture:)];
-
-    //5. Rotate
-    UIRotationGestureRecognizer* rotationRecognizer = [[UIRotationGestureRecognizer alloc]
-                                                       initWithTarget:self action:@selector(respondToRotationGesture:)];
-
-    //6. Shove
-    UIPanGestureRecognizer* shoveRecognizer = [[UIPanGestureRecognizer alloc]
-                                               initWithTarget:self action:@selector(respondToShoveGesture:)];
-    shoveRecognizer.minimumNumberOfTouches = 2;
-
-    //7. Long press
-    UILongPressGestureRecognizer* longPressRecognizer = [[UILongPressGestureRecognizer alloc]
-                                                         initWithTarget:self action:@selector(respondToLongPressGesture:)];
+    _pinchGestureRecognizer = [[UIPinchGestureRecognizer alloc] initWithTarget:self action:@selector(respondToPinchGesture:)];
+    _rotationGestureRecognizer = [[UIRotationGestureRecognizer alloc] initWithTarget:self action:@selector(respondToRotationGesture:)];
+    _shoveGestureRecognizer = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(respondToShoveGesture:)];
+    _shoveGestureRecognizer.minimumNumberOfTouches = 2;
+    _longPressGestureRecognizer = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(respondToLongPressGesture:)];
 
     // Use the delegate method 'shouldRecognizeSimultaneouslyWithGestureRecognizer' for gestures that can be concurrent
-    panRecognizer.delegate = self;
-    pinchRecognizer.delegate = self;
-    rotationRecognizer.delegate = self;
+    _panGestureRecognizer.delegate = self;
+    _pinchGestureRecognizer.delegate = self;
+    _rotationGestureRecognizer.delegate = self;
 
-    /* Setup gesture recognizers */
-    [self.view addGestureRecognizer:tapRecognizer];
-    [self.view addGestureRecognizer:doubleTapRecognizer];
-    [self.view addGestureRecognizer:panRecognizer];
-    [self.view addGestureRecognizer:pinchRecognizer];
-    [self.view addGestureRecognizer:rotationRecognizer];
-    [self.view addGestureRecognizer:shoveRecognizer];
-    [self.view addGestureRecognizer:longPressRecognizer];
+    [self.view addGestureRecognizer:_tapGestureRecognizer];
+    [self.view addGestureRecognizer:_doubleTapGestureRecognizer];
+    [self.view addGestureRecognizer:_panGestureRecognizer];
+    [self.view addGestureRecognizer:_pinchGestureRecognizer];
+    [self.view addGestureRecognizer:_rotationGestureRecognizer];
+    [self.view addGestureRecognizer:_shoveGestureRecognizer];
+    [self.view addGestureRecognizer:_longPressGestureRecognizer];
+}
+
+- (void)setTapGestureRecognizer:(UITapGestureRecognizer *)recognizer
+{
+    if (!recognizer) { return; }
+    if (_tapGestureRecognizer) {
+        [self.view removeGestureRecognizer:_tapGestureRecognizer];
+    }
+    _tapGestureRecognizer = recognizer;
+    [self.view addGestureRecognizer:_tapGestureRecognizer];
+}
+
+- (void)setDoubleTapGestureRecognizer:(UITapGestureRecognizer *)recognizer
+{
+    if (!recognizer) { return; }
+    if (_doubleTapGestureRecognizer) {
+        [self.view removeGestureRecognizer:_doubleTapGestureRecognizer];
+    }
+    _doubleTapGestureRecognizer = recognizer;
+    [self.view addGestureRecognizer:_doubleTapGestureRecognizer];
+}
+
+- (void)setPanGestureRecognizer:(UIPanGestureRecognizer *)recognizer
+{
+    if (!recognizer) { return; }
+    if (_panGestureRecognizer) {
+        [self.view removeGestureRecognizer:_panGestureRecognizer];
+    }
+    _panGestureRecognizer = recognizer;
+    [self.view addGestureRecognizer:_panGestureRecognizer];
+}
+
+- (void)setPinchGestureRecognizer:(UIPinchGestureRecognizer *)recognizer
+{
+    if (!recognizer) { return; }
+    if (_pinchGestureRecognizer) {
+        [self.view removeGestureRecognizer:_pinchGestureRecognizer];
+    }
+    _pinchGestureRecognizer = recognizer;
+    [self.view addGestureRecognizer:_pinchGestureRecognizer];
+}
+
+- (void)setRotationGestureRecognizer:(UIRotationGestureRecognizer *)recognizer
+{
+    if (!recognizer) { return; }
+    if (_rotationGestureRecognizer) {
+        [self.view removeGestureRecognizer:_rotationGestureRecognizer];
+    }
+    _rotationGestureRecognizer = recognizer;
+    [self.view addGestureRecognizer:_rotationGestureRecognizer];
+}
+
+- (void)setShoveGestureRecognizer:(UIPanGestureRecognizer *)recognizer
+{
+    if (!recognizer) { return; }
+    if (_shoveGestureRecognizer) {
+        [self.view removeGestureRecognizer:_shoveGestureRecognizer];
+    }
+    _shoveGestureRecognizer = recognizer;
+    [self.view addGestureRecognizer:_shoveGestureRecognizer];
+}
+
+- (void)setLongPressGestureRecognizer:(UILongPressGestureRecognizer *)recognizer
+{
+    if (!recognizer) { return; }
+    if (_longPressGestureRecognizer) {
+        [self.view removeGestureRecognizer:_longPressGestureRecognizer];
+    }
+    _longPressGestureRecognizer = recognizer;
+    [self.view addGestureRecognizer:_longPressGestureRecognizer];
+}
+
+- (SEL)respondToTapGestureAction
+{
+    return @selector(respondToTapGesture:);
+}
+
+- (SEL)respondToDoubleTapGestureAction
+{
+    return @selector(respondToDoubleTapGesture:);
+}
+
+- (SEL)respondToPanGestureAction
+{
+    return @selector(respondToPanGesture:);
+}
+
+- (SEL)respondToPinchGestureAction
+{
+    return @selector(respondToPinchGesture:);
+}
+
+- (SEL)respondToRotationGestureAction
+{
+    return @selector(respondToRotationGesture:);
+}
+
+- (SEL)respondToShoveGestureAction
+{
+    return @selector(respondToShoveGesture:);
+}
+
+- (SEL)respondToLongPressGestureAction
+{
+    return @selector(respondToLongPressGesture:);
 }
 
 // Implement touchesBegan to catch down events
@@ -661,12 +780,18 @@ __CG_STATIC_ASSERT(sizeof(TGGeoPoint) == sizeof(Tangram::LngLat));
     }
 
     CGFloat scale = pinchRecognizer.scale;
-    [pinchRecognizer setScale:1.0];
-    self.map->handlePinchGesture(location.x * self.contentScaleFactor, location.y * self.contentScaleFactor, scale, pinchRecognizer.velocity);
+    if (self.gestureDelegate && [self.gestureDelegate respondsToSelector:@selector(pinchFocus:recognizer:)]) {
+        CGPoint focusPosition = [self.gestureDelegate pinchFocus:self recognizer:pinchRecognizer];
+        self.map->handlePinchGesture(focusPosition.x * self.contentScaleFactor, focusPosition.y * self.contentScaleFactor, scale, pinchRecognizer.velocity);
+    } else {
+        self.map->handlePinchGesture(location.x * self.contentScaleFactor, location.y * self.contentScaleFactor, scale, pinchRecognizer.velocity);
+    }
 
     if (self.gestureDelegate && [self.gestureDelegate respondsToSelector:@selector(mapView:recognizer:didRecognizePinchGesture:)]) {
         [self.gestureDelegate mapView:self recognizer:pinchRecognizer didRecognizePinchGesture:location];
     }
+
+    [pinchRecognizer setScale:1.0];
 }
 
 - (void)respondToRotationGesture:(UIRotationGestureRecognizer *)rotationRecognizer
@@ -679,12 +804,18 @@ __CG_STATIC_ASSERT(sizeof(TGGeoPoint) == sizeof(Tangram::LngLat));
     }
 
     CGFloat rotation = rotationRecognizer.rotation;
-    [rotationRecognizer setRotation:0.0];
-    self.map->handleRotateGesture(position.x * self.contentScaleFactor, position.y * self.contentScaleFactor, rotation);
+    if (self.gestureDelegate && [self.gestureDelegate respondsToSelector:@selector(rotationFocus:recognizer:)]) {
+        CGPoint focusPosition = [self.gestureDelegate rotationFocus:self recognizer:rotationRecognizer];
+        self.map->handleRotateGesture(focusPosition.x * self.contentScaleFactor, focusPosition.y * self.contentScaleFactor, rotation);
+    } else {
+        self.map->handleRotateGesture(position.x * self.contentScaleFactor, position.y * self.contentScaleFactor, rotation);
+    }
 
     if (self.gestureDelegate && [self.gestureDelegate respondsToSelector:@selector(mapView:recognizer:didRecognizeRotationGesture:)]) {
         [self.gestureDelegate mapView:self recognizer:rotationRecognizer didRecognizeRotationGesture:position];
     }
+
+    [rotationRecognizer setRotation:0.0];
 }
 
 - (void)respondToShoveGesture:(UIPanGestureRecognizer *)shoveRecognizer
@@ -713,7 +844,8 @@ __CG_STATIC_ASSERT(sizeof(TGGeoPoint) == sizeof(Tangram::LngLat));
 {
     self = [super initWithNibName:nibNameOrNil bundle:nibBundleOrNil];
     if (self != nil) {
-        std::shared_ptr<Platform> platform(new iOSPlatform(self));
+        __weak TGMapViewController* weakSelf = self;
+        std::shared_ptr<Tangram::Platform> platform(new Tangram::iOSPlatform(weakSelf));
         self.map = new Tangram::Map(platform);
     }
     return self;
@@ -723,7 +855,8 @@ __CG_STATIC_ASSERT(sizeof(TGGeoPoint) == sizeof(Tangram::LngLat));
 {
     self = [super initWithCoder:aDecoder];
     if (self != nil) {
-        std::shared_ptr<Platform> platform(new iOSPlatform(self));
+        __weak TGMapViewController* weakSelf = self;
+        std::shared_ptr<Tangram::Platform> platform(new Tangram::iOSPlatform(weakSelf));
         self.map = new Tangram::Map(platform);
     }
     return self;
@@ -740,8 +873,14 @@ __CG_STATIC_ASSERT(sizeof(TGGeoPoint) == sizeof(Tangram::LngLat));
         NSLog(@"Failed to create ES context");
     }
 
+    self->viewComplete = NO;
+    self->captureFrameWaitForViewComplete = YES;
+    self->shouldCaptureFrame = NO;
     self.renderRequested = YES;
     self.continuous = NO;
+    self.markersById = [[NSMutableDictionary alloc] init];
+    self.dataLayersByName = [[NSMutableDictionary alloc] init];
+    self.resourceRoot = [[NSBundle mainBundle] resourceURL];
 
     if (!self.httpHandler) {
         self.httpHandler = [[TGHttpHandler alloc] initWithCachePath:@"/tangram_cache"
@@ -751,17 +890,24 @@ __CG_STATIC_ASSERT(sizeof(TGGeoPoint) == sizeof(Tangram::LngLat));
 
     GLKView* view = (GLKView *)self.view;
     view.context = self.context;
+
+    view.drawableColorFormat = GLKViewDrawableColorFormatRGBA8888;
     view.drawableDepthFormat = GLKViewDrawableDepthFormat24;
-    view.drawableMultisample = GLKViewDrawableMultisample4X;
+    view.drawableStencilFormat = GLKViewDrawableStencilFormat8;
+    view.drawableMultisample = GLKViewDrawableMultisampleNone;
+
     self.contentScaleFactor = view.contentScaleFactor;
 
     [self setupGestureRecognizers];
     [self setupGL];
-
 }
 
 - (void)dealloc
 {
+    if (self.map) {
+        delete self.map;
+    }
+
     if ([EAGLContext currentContext] == self.context) {
         [EAGLContext setCurrentContext:nil];
     }
@@ -771,16 +917,9 @@ __CG_STATIC_ASSERT(sizeof(TGGeoPoint) == sizeof(Tangram::LngLat));
 {
     [super didReceiveMemoryWarning];
 
-    if ([self isViewLoaded] && ([[self view] window] == nil)) {
-        self.view = nil;
-
-        if ([EAGLContext currentContext] == self.context) {
-            [EAGLContext setCurrentContext:nil];
-        }
-        self.context = nil;
+    if (self.map) {
+        self.map->onMemoryWarning();
     }
-
-    // Dispose of any resources that can be recreated.
 }
 
 - (void)setupGL
@@ -788,21 +927,27 @@ __CG_STATIC_ASSERT(sizeof(TGGeoPoint) == sizeof(Tangram::LngLat));
     [EAGLContext setCurrentContext:self.context];
 
     self.map->setupGL();
-
-    int width = self.view.bounds.size.width;
-    int height = self.view.bounds.size.height;
-
-    self.map->resize(width * self.contentScaleFactor, height * self.contentScaleFactor);
-
     self.map->setPixelScale(self.contentScaleFactor);
+
+    // Query background color set in UI designer
+    GLKView* view = (GLKView *)self.view;
+
+    self.preferredFramesPerSecond = 60;
+
+    UIColor* backgroundColor = view.backgroundColor;
+
+    if (backgroundColor != nil) {
+        CGFloat red = 0.0, green = 0.0, blue = 0.0, alpha = 0.0;
+        [backgroundColor getRed:&red green:&green blue:&blue alpha:&alpha];
+        self.map->setDefaultBackgroundColor(red, green, blue);
+    }
 }
 
-- (void)tearDownGL
-{
-    if (!self.map) { return; }
-
-    delete self.map;
-    self.map = nullptr;
+-(void)viewWillLayoutSubviews {
+    [super viewWillLayoutSubviews];
+    int width = self.view.bounds.size.width;
+    int height = self.view.bounds.size.height;
+    self.map->resize(width * self.contentScaleFactor, height * self.contentScaleFactor);
 }
 
 - (void)viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator
@@ -833,9 +978,15 @@ __CG_STATIC_ASSERT(sizeof(TGGeoPoint) == sizeof(Tangram::LngLat));
     self.paused = !c;
 }
 
+- (void)captureScreenshot:(BOOL)waitForViewComplete
+{
+    self->captureFrameWaitForViewComplete = waitForViewComplete;
+    self->shouldCaptureFrame = YES;
+}
+
 - (void)update
 {
-    bool viewComplete = self.map->update([self timeSinceLastUpdate]);
+    self->viewComplete = self.map->update([self timeSinceLastUpdate]);
 
     if (viewComplete && [self.mapViewDelegate respondsToSelector:@selector(mapViewDidCompleteLoading:)]) {
         [self.mapViewDelegate mapViewDidCompleteLoading:self];
@@ -851,6 +1002,19 @@ __CG_STATIC_ASSERT(sizeof(TGGeoPoint) == sizeof(Tangram::LngLat));
 - (void)glkView:(GLKView *)view drawInRect:(CGRect)rect
 {
     self.map->render();
+
+    if (self.mapViewDelegate && [self.mapViewDelegate respondsToSelector:@selector(mapView:didCaptureScreenshot:)]) {
+        if (self->shouldCaptureFrame && (!self->captureFrameWaitForViewComplete || self->viewComplete)) {
+            UIGraphicsBeginImageContext(self.view.frame.size);
+            [self.view drawViewHierarchyInRect:self.view.frame afterScreenUpdates:YES];
+            UIImage* screenshot = UIGraphicsGetImageFromCurrentImageContext();
+            UIGraphicsEndImageContext();
+
+            [self.mapViewDelegate mapView:self didCaptureScreenshot:screenshot];
+
+            self->shouldCaptureFrame = NO;
+        }
+    }
 }
 
 @end
